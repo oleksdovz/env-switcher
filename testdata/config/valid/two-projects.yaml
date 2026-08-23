@@ -1,0 +1,17 @@
+version: 1
+shared:
+  env-vars:
+    SHARED: shared
+  shell-functions:
+    hello:
+      bash: echo bash
+      zsh: print zsh
+envs:
+  dev:
+    project: /tmp/dev
+    env-vars:
+      PROJECT: dev
+  staging:
+    project: /tmp/staging
+    env-vars:
+      PROJECT: staging

@@ -1,0 +1,7 @@
+version: 1
+envs:
+  dev:
+    project: /tmp
+    shell-functions:
+      example:
+        fish: echo unsupported

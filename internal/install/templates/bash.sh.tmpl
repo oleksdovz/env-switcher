@@ -1,0 +1,8 @@
+#env-switcher
+env-switcher() {
+  local __env_switcher_status
+  __ENV_SWITCHER_TARGET_SHELL=bash "$HOME/.env-switcher/bin/env-switcher" "$@"
+  __env_switcher_status=$?
+  [ -f "$HOME/.env-switcher/current-env" ] && source "$HOME/.env-switcher/current-env"
+  return $__env_switcher_status
+}

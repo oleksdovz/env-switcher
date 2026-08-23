@@ -1,15 +1,11 @@
 <!--
 Sync Impact Report
-- Version change: template -> 1.0.0
+- Version change: 1.0.0 -> 2.0.0
 - Modified principles:
-  - Placeholder Principle 1 -> I. Portable Go CLI
-  - Placeholder Principle 2 -> II. Safe Shell Integration
-  - Placeholder Principle 3 -> III. Configuration Is the Source of Truth
-  - Placeholder Principle 4 -> IV. Secrets Stay Local and Protected
-  - Placeholder Principle 5 -> V. Tested and Predictable Terminal UX
-- Added sections:
-  - Product and Platform Constraints
-  - Development Workflow and Quality Gates
+  - III. Configuration Is the Source of Truth -> trusted shell-function lifecycle added
+  - IV. Secrets Stay Local and Protected -> intentional local F2/F3 disclosure exception added
+  - V. Tested and Predictable Terminal UX -> F2 warning and trusted-code warnings added
+- Added sections: none
 - Removed sections: none
 - Follow-up TODOs: none
 -->
@@ -48,6 +44,12 @@ configuration schema MUST be documented, versionable, deterministically parsed, 
 before any values are applied. Unknown, duplicate, malformed, or unsafe entries MUST produce clear
 errors; partial application is forbidden.
 
+Shell functions defined in settings MUST be treated as trusted user-provided executable code. Their
+names, permissions, size, encoding, and target-shell syntax MUST be validated without claiming that
+arbitrary code is semantically safe. Function bodies MUST NOT execute during viewing, editing,
+validation, reload, hashing, or change detection. They MAY execute only after the user explicitly
+selects an environment.
+
 Writes to configuration or managed state under `~/.env-switcher` MUST be atomic. Reload MUST replace
 the in-memory project list only after the complete file passes validation. Paths containing `~`
 MUST be expanded consistently on Linux and macOS without altering the stored configuration.
@@ -58,8 +60,19 @@ or internally inconsistent environment.
 ### IV. Secrets Stay Local and Protected
 Configuration can contain credentials and MUST be treated as sensitive. `~/.env-switcher` MUST be
 created with user-only access, and files containing environment values MUST use user-only read/write
-permissions where the platform supports POSIX permissions. Secrets MUST NOT be printed, logged,
-included in diagnostics, committed as fixtures, or exposed in process arguments.
+permissions where the platform supports POSIX permissions.
+
+F2 and F3 are the only approved intentional local secret-disclosure paths. F2 MUST display a short
+sensitive-data warning and require the user to continue before showing the complete unmasked
+`~/.env-switcher/settings.yaml`. F3 MAY expose the complete file through the user-selected editor as
+an explicit editing action. Cancellation before either action MUST disclose nothing.
+
+Outside those explicit F2/F3 actions, secret values MUST NOT appear in logs, errors, diagnostics,
+crash reports, shell-integration diagnostic output, process arguments, generated examples, or test
+fixtures. Displayed or edited F2/F3 content MUST NOT be copied into any prohibited channel. Shell
+activation output MAY contain safely quoted secret literals only when required to apply the selected
+environment; it MUST be captured by the wrapper, MUST NOT be printed as diagnostic output, and MUST
+NOT be persisted by env-switcher.
 
 The project MUST NOT claim that plaintext YAML is a secure secret store. Documentation MUST
 recommend references to a dedicated secret manager where practical and MUST clearly describe the
@@ -71,9 +84,14 @@ honest limitations are mandatory.
 ### V. Tested and Predictable Terminal UX
 The CLI MUST provide a keyboard-driven TUI that works in supported Bash and Zsh terminals and
 remains usable without mouse input. The following key contracts MUST remain stable unless changed
-through a documented breaking release: `F10` exits, `F2` views
-`~/.env-switcher/settings.yaml`, `F3` opens that file in the resolved default editor, `F4` validates
-and reloads the project list, and `F5` installs or updates the shell integration.
+through a documented breaking release: `F10` exits, `F2` warns and then views the complete unmasked
+`~/.env-switcher/settings.yaml` after confirmation, `F3` opens that file in the resolved default
+editor, `F4` validates and reloads the project list, and `F5` installs or updates the shell
+integration.
+
+The TUI MUST warn that configured shell functions are trusted executable code on first run and
+whenever their definitions differ from the last acknowledged set. Warning acknowledgement state
+MUST NOT contain function bodies or secret values and MUST be stored with user-only access.
 
 Every action MUST provide a visible success or actionable failure state. Exit codes MUST be stable
 and meaningful. Unit tests MUST cover configuration parsing, validation, environment calculation,
@@ -96,6 +114,8 @@ cross-platform tests are non-negotiable.
   modifying unrelated user variables.
 - Shell-function names and bodies from YAML MUST be validated before installation or execution.
   Arbitrary configuration content MUST NOT be evaluated merely to discover environment values.
+- Viewing, editing, validation, reload, hashing, and trusted-code change detection MUST NOT execute
+  configured shell functions; only explicit environment selection MAY apply them.
 - The default editor MUST be resolved using documented precedence, beginning with user-controlled
   editor environment variables and ending in an explicit actionable error when no editor exists.
 - TUI behavior MUST account for terminals that do not deliver function keys reliably by providing
@@ -134,4 +154,4 @@ non-semantic clarification. Every compliance review MUST verify the version, dat
 Report. Complexity that conflicts with portability, safety, or testability MUST be rejected unless
 an amendment explicitly authorizes it.
 
-**Version**: 1.0.0 | **Ratified**: 2026-08-23 | **Last Amended**: 2026-08-23
+**Version**: 2.0.0 | **Ratified**: 2026-08-23 | **Last Amended**: 2026-08-23

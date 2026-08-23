@@ -1,0 +1,21 @@
+# Go build and test artifacts
+*.exe
+*.test
+*.out
+coverage/
+dist/
+vendor/
+
+# Local env-switcher state and secrets
+.env-switcher/
+.env
+.env.*
+!.env.example
+
+# Editors and operating systems
+.DS_Store
+Thumbs.db
+*.tmp
+*.swp
+.vscode/
+.idea/

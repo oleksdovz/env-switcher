@@ -1,0 +1,196 @@
+package config
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+)
+
+//go:generate cp ../../testdata/config/starter.yaml starter.yaml
+
+var Starter = []byte(`version: 1
+
+shared:
+  env-vars: &shared_env_vars
+    ENV_SWITCHER_MANAGED: "true"
+    COMPANY_NAME: "Example & Test LLC"
+    LOG_FORMAT: "json"
+    LOG_LEVEL: "info"
+    AWS_REGION: "eu-west-1"
+    KUBECONFIG: "~/.kube/config"
+    SHARED_EMPTY: ""
+    SHARED_UNICODE: "Україна 🇺🇦"
+    SHARED_LITERAL_COMMAND: '$(echo must-not-run)'
+    SHARED_SPECIAL_CHARS: '! @ # $ % ^ & * ( ) [ ] { }'
+
+  shell-functions: &shared_shell_functions
+    env_info: |
+        print -r -- "Environment: ${ENV_NAME:-unknown}"
+        print -r -- "Project: ${project:-unknown}"
+
+    k_load: |
+        source <(kubectl completion zsh)
+        compdef _kubectl k
+
+    k_current: |
+        kubectl config current-context
+
+  shell-cmd: &shared_shell_cmd |
+    export ENV_SWITCHER_SESSION="active"
+
+envs:
+  dev:
+    project: "~/projects/env switcher/dev"
+
+    env-vars:
+      <<: *shared_env_vars
+
+      ENV_NAME: "dev"
+      project: "~/projects/env switcher/dev"
+      APP_ENV: "development"
+      APP_DEBUG: "true"
+      APP_PORT: "3000"
+
+      # Overrides shared AWS_REGION
+      AWS_REGION: "eu-central-1"
+      AWS_PROFILE: "env-switcher-dev"
+      AWS_ACCESS_KEY_ID: "DEV_EXAMPLE_ONLY"
+      AWS_SECRET_ACCESS_KEY: "DEV_PLACEHOLDER_ONLY"
+
+      API_BASE_URL: "http://localhost:3000/api?v=1&debug=true"
+      DATABASE_URL: "postgres://dev:PLACEHOLDER@localhost:5432/dev"
+      VALUE_WITH_SPACES: "one two three"
+      VALUE_WITH_DOLLAR: '$HOME ${USER} $PATH'
+      VALUE_WITH_COMMAND: '$(touch /tmp/must-not-run)'
+      VALUE_WITH_UNICODE: "Київ — 東京 — 🚀"
+
+    shell-functions:
+      <<: *shared_shell_functions
+
+      dev_status: |
+        print -r -- "Development API: $API_BASE_URL"
+
+      # Overrides shared k_current
+      k_current: |
+        print -n -- 'DEV context: '
+        kubectl config current-context
+
+    shell-cmd: |
+      export DEV_TOOLS_ENABLED="true"
+
+  staging:
+    project: "~/projects/platform/staging"
+
+    env-vars:
+      <<: *shared_env_vars
+
+      ENV_NAME: "staging"
+      project: "~/projects/platform/staging"
+      APP_ENV: "staging"
+
+      AWS_PROFILE: "env-switcher-staging"
+      AWS_ACCESS_KEY_ID: "STAGING_EXAMPLE_ONLY"
+      AWS_SECRET_ACCESS_KEY: "STAGING_PLACEHOLDER_ONLY"
+      AWS_ACCOUNT_ID: "000000000002"
+
+      KUBE_CONTEXT: "example-staging"
+      KUBE_NAMESPACE: "platform-staging"
+      API_BASE_URL: "https://staging.example.invalid/api"
+
+      # Overrides shared LOG_LEVEL
+      LOG_LEVEL: "debug"
+
+    shell-functions:
+      <<: *shared_shell_functions
+
+      staging_status: |
+          print -r -- "Account: $AWS_ACCOUNT_ID"
+          print -r -- "Namespace: $KUBE_NAMESPACE"
+
+      k_use_staging: |
+          kubectl config use-context "$KUBE_CONTEXT"
+
+    shell-cmd: |
+      export STAGING_WARNING="Shared staging environment"
+
+  prod:
+    project: "~/projects/platform/prod"
+
+    env-vars:
+      <<: *shared_env_vars
+
+      ENV_NAME: "prod"
+      project: "~/projects/platform/prod"
+      APP_ENV: "production"
+      APP_DEBUG: "false"
+
+      AWS_PROFILE: "env-switcher-production"
+      AWS_ACCESS_KEY_ID: "PROD_EXAMPLE_ONLY"
+      AWS_SECRET_ACCESS_KEY: "PROD_PLACEHOLDER_DO_NOT_USE"
+      AWS_ACCOUNT_ID: "000000000003"
+
+      KUBE_CONTEXT: "example-production"
+      KUBE_NAMESPACE: "platform-production"
+      PROD_BANNER: "⚠ PRODUCTION ENVIRONMENT ⚠"
+
+      # Overrides shared values
+      LOG_LEVEL: "warn"
+      AWS_REGION: "eu-west-2"
+
+    shell-functions:
+      <<: *shared_shell_functions
+
+      prod_warning: |
+          print -r -- "\n$PROD_BANNER\n"
+
+      prod_status: |
+          print -r -- "Account: $AWS_ACCOUNT_ID"
+          print -r -- "Region: $AWS_REGION"
+
+    shell-cmd: |
+      printf '%s\n' "$PROD_BANNER"`)
+
+func Bootstrap() (string, bool, error) {
+	path, err := SettingsPath()
+	if err != nil {
+		return "", false, err
+	}
+	if _, err := os.Stat(path); err == nil {
+		return path, false, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", false, err
+	}
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", false, fmt.Errorf("create settings directory: %w", err)
+	}
+	if err := os.Chmod(dir, 0o700); err != nil {
+		return "", false, err
+	}
+	tmp, err := os.CreateTemp(dir, ".settings-*.tmp")
+	if err != nil {
+		return "", false, err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if err := tmp.Chmod(0o600); err != nil {
+		tmp.Close()
+		return "", false, err
+	}
+	if _, err := tmp.Write(Starter); err != nil {
+		tmp.Close()
+		return "", false, err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return "", false, err
+	}
+	if err := tmp.Close(); err != nil {
+		return "", false, err
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		return "", false, err
+	}
+	return path, true, nil
+}

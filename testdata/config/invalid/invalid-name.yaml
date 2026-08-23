@@ -1,0 +1,6 @@
+version: 1
+envs:
+  dev:
+    project: /tmp
+    env-vars:
+      bad-name: placeholder

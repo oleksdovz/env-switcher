@@ -1,0 +1,4 @@
+version: 1
+shared: &shared {}
+envs:
+  dev: *shared

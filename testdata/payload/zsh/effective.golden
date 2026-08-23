@@ -1,0 +1,2 @@
+export VALUE='a'\''b'
+export __ENV_SWITCHER_ACTIVE_PROJECT='dev'

@@ -1,0 +1,8 @@
+version: 1
+shared: &shared
+  env-vars:
+    VALUE: placeholder
+envs:
+  dev:
+    <<: *shared
+    project: /tmp
