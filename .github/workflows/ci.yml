@@ -1,0 +1,38 @@
+name: CI
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux
+            os: ubuntu-latest
+          - name: macos-intel
+            os: macos-13
+          - name: macos-arm
+            os: macos-14
+    name: test (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 1.26.1
+          cache: true
+      - if: matrix.name == 'linux'
+        run: sudo apt-get update && sudo apt-get install --yes zsh
+      - run: test -z "$(gofmt -l .)"
+      - run: go vet ./...
+      - run: go test ./...
+      - run: go test -run=^$ -fuzz=FuzzParseDoesNotPanic -fuzztime=5s ./internal/config
+      - run: go test -run=^$ -fuzz=FuzzQuote -fuzztime=5s ./internal/shell
+      - run: go test -race ./...
+      - run: go build -trimpath ./cmd/env-switcher
+      # No hosted arm64 Linux runner in this matrix; cross-compile-only sanity check.
+      - if: matrix.name == 'linux'
+        run: GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -o /tmp/env-switcher-linux-arm64 ./cmd/env-switcher

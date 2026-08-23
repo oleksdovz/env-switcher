@@ -1,12 +1,22 @@
 # Operations
 
+## Cutting a release
+
+Run the `Release` workflow from the Actions tab (`workflow_dispatch`, no tag push needed) and pick
+a version-bump type (`patch` — default, `minor`, or `major`). It computes the next `vX.Y.Z` from
+the latest existing tag, runs the test suite, creates and pushes that tag, cross-builds
+`linux/amd64`, `linux/arm64`, `darwin/amd64`, and `darwin/arm64`, zips each binary, and publishes a
+GitHub Release with the zips plus `SHA256SUMS`. `CI` (`.github/workflows/ci.yml`) runs the same
+checks natively on Linux, Intel macOS, and Apple Silicon macOS on every push/PR.
+
 ## Verify a release
 
-Download the platform artifact together with `SHA256SUMS`, then verify before installation:
+Download the platform `.zip` together with `SHA256SUMS`, verify, then unzip:
 
 ```bash
-sha256sum --check SHA256SUMS   # Linux
+sha256sum --check SHA256SUMS      # Linux
 shasum -a 256 --check SHA256SUMS  # macOS
+unzip env-switcher_<os>_<arch>.zip
 ```
 
 Only use the checksum entry matching `linux|darwin` and `amd64|arm64`. Release artifacts are
