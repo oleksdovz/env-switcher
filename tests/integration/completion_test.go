@@ -83,6 +83,27 @@ func buildCompletionFixture(t *testing.T) (home string) {
 	return home
 }
 
+// pathWithoutYq returns the current $PATH with every directory that actually contains a `yq`
+// executable removed, so a "yq is not installed" scenario stays true regardless of where a given
+// machine happens to install it. A hardcoded "/usr/bin:/bin" isn't good enough here — some CI
+// images (unlike a typical dev machine, where yq usually lives under Homebrew) ship yq
+// preinstalled directly in /usr/bin, so that literal PATH value doesn't actually hide it.
+func pathWithoutYq(t *testing.T) string {
+	t.Helper()
+	dirs := filepath.SplitList(os.Getenv("PATH"))
+	kept := make([]string, 0, len(dirs))
+	for _, d := range dirs {
+		if d == "" {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(d, "yq")); err == nil {
+			continue
+		}
+		kept = append(kept, d)
+	}
+	return strings.Join(kept, string(filepath.ListSeparator))
+}
+
 // writeRC installs the real, current wrapper template (installer.Wrapper — never a hand-copied
 // string, so this test stays honest to what's actually shipped) into the given shell's startup
 // file, plus zsh's compinit bootstrap where relevant.
@@ -118,7 +139,14 @@ func completeInPTY(t *testing.T, shellName, home string, extraEnv []string, keys
 	case "bash":
 		cmd = exec.Command("bash", "--rcfile", filepath.Join(home, ".bashrc"), "-i")
 	case "zsh":
-		cmd = exec.Command("zsh", "-i")
+		// -d (--no-globalrcs) skips /etc/zsh/* entirely, so this test only ever runs the rc file
+		// it wrote into the isolated $HOME below. Without it, whatever a given machine's system-wide
+		// /etc/zsh/zshrc happens to do (some CI images configure completion, or call compinit,
+		// system-wide for every user) runs first and is outside this test's control — on at least
+		// one real CI runner that produced its own "insecure directories" prompt before this test's
+		// own compinit call ever got a chance to run, which then ate the test's typed keys as its
+		// y/n answer instead of a TAB press.
+		cmd = exec.Command("zsh", "-d", "-i")
 	default:
 		t.Fatalf("unsupported shell %q", shellName)
 	}
@@ -191,7 +219,7 @@ func TestZshCompletionFallsBackToListWithoutYq(t *testing.T) {
 	}
 	home := buildCompletionFixture(t)
 	writeRC(t, home, "zsh")
-	screen := completeInPTY(t, "zsh", home, []string{"PATH=/usr/bin:/bin"}, "env-switcher \t\t", 1500*time.Millisecond)
+	screen := completeInPTY(t, "zsh", home, []string{"PATH=" + pathWithoutYq(t)}, "env-switcher \t\t", 1500*time.Millisecond)
 	if !strings.Contains(screen, "dev") || !strings.Contains(screen, "staging") {
 		t.Fatalf("completion did not fall back to `env-switcher list` without yq: %q", screen)
 	}
@@ -220,7 +248,7 @@ func TestBashCompletionFallsBackToListWithoutYq(t *testing.T) {
 	}
 	home := buildCompletionFixture(t)
 	writeRC(t, home, "bash")
-	screen := completeInPTY(t, "bash", home, []string{"PATH=/usr/bin:/bin"}, "env-switcher \t\t", 1500*time.Millisecond)
+	screen := completeInPTY(t, "bash", home, []string{"PATH=" + pathWithoutYq(t)}, "env-switcher \t\t", 1500*time.Millisecond)
 	if !strings.Contains(screen, "dev") || !strings.Contains(screen, "staging") {
 		t.Fatalf("completion did not fall back to `env-switcher list` without yq: %q", screen)
 	}
@@ -347,7 +375,7 @@ func testCompletionDegradesGracefully(t *testing.T, shellName string) {
 			}
 			path := os.Getenv("PATH")
 			if c.noYq {
-				path = "/usr/bin:/bin"
+				path = pathWithoutYq(t)
 			}
 			var script string
 			var cmd *exec.Cmd

@@ -266,7 +266,9 @@ env-switcher manages itself:
     dev:
       project: $HOME/projects/dev
       env-vars:
+        KUBECONFIG: $HOME/.kube/config
         CODEX_HOME: $_PROJECT/.codex
+        CODEX_SQLITE_HOME: $_PROJECT/.codex/sqlite
   ```
 
 - **`__ENV_SWITCHER_ACTIVE_PROJECT`** is exported after your own functions/variables and before
