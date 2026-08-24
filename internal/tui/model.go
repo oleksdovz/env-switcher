@@ -29,9 +29,17 @@ type Model struct {
 	Selected, Status                     string
 	Width, Height                        int
 	mode, settingsPath, digest, fullFile string
-	services                             Services
-	form                                 *huh.Form
-	field                                *huh.Select[string]
+	// quitting is set on every path that returns tea.Quit. Bubble Tea, in this inline
+	// (non-alt-screen) mode, renders whatever View() returns for the model at the moment Update
+	// decides to quit — that's the last frame left behind in the terminal's scrollback once the
+	// program exits, since exiting only erases what's *below* it, not the frame itself. Without
+	// this, the form and the "F2/v View  F3/e Edit  ..." shortcut footer (both irrelevant once
+	// the program has already ended) would linger there after every run. render() checks this
+	// first and renders nothing once it's set.
+	quitting bool
+	services Services
+	form     *huh.Form
+	field    *huh.Select[string]
 }
 
 type operationMsg struct {
@@ -103,6 +111,7 @@ func (m Model) handleShortcut(msg tea.KeyPressMsg) (Model, tea.Cmd, bool) {
 		m.mode = "upgrade-warning"
 		return m, nil, true
 	case "quit":
+		m.quitting = true
 		return m, tea.Quit, true
 	case "select":
 		if len(m.Settings.Envs) == 0 {
@@ -167,9 +176,11 @@ func (m Model) forwardToForm(message tea.Msg) (tea.Model, tea.Cmd) {
 		if v, ok := m.field.GetValue().(string); ok {
 			m.Selected = v
 		}
+		m.quitting = true
 		return m, tea.Quit
 	case huh.StateAborted:
 		// Cancellation (e.g. ctrl+c) is a normal exit, same as F10/q: leave Selected empty.
+		m.quitting = true
 		return m, tea.Quit
 	}
 	return m, cmd
@@ -185,12 +196,12 @@ func (m Model) handleOperation(msg operationMsg) (Model, tea.Cmd) {
 		m.Settings = msg.settings
 		m.digest = config.FunctionDigest(msg.settings)
 		m.field = newSelectField(msg.settings, focused)
-		m.setForm(newForm(m.field))
+		cmd := m.setForm(newForm(m.field))
 		if config.HasFunctions(msg.settings) && !config.IsAcknowledged(m.digest) {
 			m.mode = "trust"
 		}
 		m.Status = "projects reloaded"
-		return m, nil
+		return m, cmd
 	}
 	if msg.message != "" {
 		m.Status = msg.message
@@ -203,14 +214,25 @@ func (m Model) handleOperation(msg operationMsg) (Model, tea.Cmd) {
 // setForm installs a freshly built form (used on reload, since the environment list itself may
 // have changed shape) and immediately seeds it with the last known terminal size, since a
 // replacement form otherwise won't see another tea.WindowSizeMsg until the next real resize.
-func (m *Model) setForm(form *huh.Form) {
+//
+// It also runs the new form's own Init(), and returns the resulting tea.Cmd for the caller to
+// return onward to Bubble Tea. Skipping this looked harmless (the form still renders) but wasn't:
+// huh only marks a form's first group "active" and focuses its selected field from inside Init()
+// — a freshly built *huh.Form has neither yet, so without this, a reload silently left the
+// rebuilt select field unfocused. It kept rendering and kept accepting the outer model's own
+// shortcuts (F2/F3/...), which made it look normal, but arrow keys and Enter never reached the
+// field itself, so nothing could be selected until the next reload happened to fix it again.
+func (m *Model) setForm(form *huh.Form) tea.Cmd {
 	m.form = form
-	if m.Width > 0 || m.Height > 0 {
-		next, _ := m.form.Update(tea.WindowSizeMsg{Width: m.Width, Height: m.Height})
-		if f, ok := next.(*huh.Form); ok {
-			m.form = f
-		}
+	initCmd := m.form.Init()
+	if m.Width == 0 && m.Height == 0 {
+		return initCmd
 	}
+	next, sizeCmd := m.form.Update(tea.WindowSizeMsg{Width: m.Width, Height: m.Height})
+	if f, ok := next.(*huh.Form); ok {
+		m.form = f
+	}
+	return tea.Batch(initCmd, sizeCmd)
 }
 
 func (m Model) reloadCmd() tea.Cmd {

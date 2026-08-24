@@ -27,7 +27,7 @@ func TestDirectSwitchWritesProjectVar(t *testing.T) {
 	}
 
 	var stdout bytes.Buffer
-	if err := switchCommand("bash", "dev", &stdout); err != nil {
+	if err := switchCommand("bash", "dev", nil, &stdout, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -58,7 +58,7 @@ func TestSwitchingBetweenProjectsUpdatesProjectVarInPayload(t *testing.T) {
 	}
 
 	var stdout bytes.Buffer
-	if err := switchCommand("bash", "a", &stdout); err != nil {
+	if err := switchCommand("bash", "a", nil, &stdout, nil); err != nil {
 		t.Fatal(err)
 	}
 	afterA, err := os.ReadFile(filepath.Join(dir, "current-env"))
@@ -69,7 +69,7 @@ func TestSwitchingBetweenProjectsUpdatesProjectVarInPayload(t *testing.T) {
 		t.Fatalf("current-env after switching to a missing its own _PROJECT: %q", afterA)
 	}
 
-	if err := switchCommand("bash", "b", &stdout); err != nil {
+	if err := switchCommand("bash", "b", nil, &stdout, nil); err != nil {
 		t.Fatal(err)
 	}
 	afterB, err := os.ReadFile(filepath.Join(dir, "current-env"))
@@ -97,7 +97,7 @@ func TestSwitchRejectsUnresolvedProject(t *testing.T) {
 		t.Fatal(err)
 	}
 	var stdout bytes.Buffer
-	if err := switchCommand("bash", "dev", &stdout); err == nil {
+	if err := switchCommand("bash", "dev", nil, &stdout, nil); err == nil {
 		t.Fatal("expected switching to fail for an unresolved project path")
 	}
 }
@@ -120,7 +120,7 @@ func TestSwitchOverwritesManuallyDeclaredProjectVar(t *testing.T) {
 		t.Fatalf("settings with a manually declared _PROJECT should still load: %v", err)
 	}
 	var stdout bytes.Buffer
-	if err := switchCommand("bash", "dev", &stdout); err != nil {
+	if err := switchCommand("bash", "dev", nil, &stdout, nil); err != nil {
 		t.Fatal(err)
 	}
 	currentEnv, err := os.ReadFile(filepath.Join(dir, "current-env"))

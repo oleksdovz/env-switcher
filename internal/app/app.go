@@ -91,24 +91,27 @@ func (a *App) Run(ctx context.Context, args []string, stdin io.Reader, stdout, s
 		}
 		return OutcomeSuccess.ExitCode()
 	case "--select":
-		if err := switchDispatch(args[1:], stdout); err != nil {
+		if err := switchDispatch(args[1:], stdin, stdout, stderr); err != nil {
 			return report(stderr, err)
 		}
 		return OutcomeSuccess.ExitCode()
 	default:
-		if err := switchDispatch(args, stdout); err != nil {
+		if err := switchDispatch(args, stdin, stdout, stderr); err != nil {
 			return report(stderr, err)
 		}
 		return OutcomeSuccess.ExitCode()
 	}
 }
 
-func switchDispatch(args []string, stdout io.Writer) error {
+// switchDispatch parses the plain-CLI switch form's arguments and runs it. stdin/stderr let
+// switchCommand confirm a changed trusted-function digest inline (see confirmTrustedFunctions)
+// instead of hard-refusing the way it must when called from inside the TUI's raw-mode loop.
+func switchDispatch(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	shellName, project, err := switchArgs(args)
 	if err != nil {
 		return &Error{Outcome: OutcomeCompatibility, Op: "switch", Message: err.Error()}
 	}
-	return switchCommand(shellName, project, stdout)
+	return switchCommand(shellName, project, stdin, stdout, stderr)
 }
 
 func report(stderr io.Writer, err error) int {

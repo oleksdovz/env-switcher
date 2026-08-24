@@ -16,6 +16,15 @@ const (
 // edge, and a divider before the button row at the bottom of the same box. Environment selection
 // itself (the default case) is rendered by the embedded huh.Form instead — see renderSelect.
 func (m Model) render() string {
+	if m.quitting {
+		// This inline (non-alt-screen) program leaves whatever View() returns here as the last
+		// frame in the terminal's scrollback once it exits — see the `quitting` field's doc
+		// comment on Model. Nothing here (the form, the shortcut footer, a stale Status line) is
+		// useful once the program has already ended, so render nothing instead of leaving it
+		// behind. `switched to <project>` (or whatever else the CLI has to say) is printed
+		// separately, after this program has already returned.
+		return ""
+	}
 	switch m.mode {
 	case "trust":
 		return drawDialog("Trust Warning", []string{

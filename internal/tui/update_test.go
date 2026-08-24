@@ -118,4 +118,10 @@ func TestSelectionPayloadIntentOnlyAfterEnter(t *testing.T) {
 	if m.Selected != "dev" {
 		t.Fatal("Enter did not select project")
 	}
+	// This is the frame Bubble Tea leaves in the terminal's scrollback once the program exits
+	// (inline, non-alt-screen mode) — it must be empty, not the form/footer from the moment
+	// selection completed, or that clutter lingers after every switch.
+	if v := m.render(); v != "" {
+		t.Fatalf("completing selection left content behind that would linger after exit: %q", v)
+	}
 }

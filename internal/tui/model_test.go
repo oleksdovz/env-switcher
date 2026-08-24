@@ -8,6 +8,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	huh "charm.land/huh/v2"
 	"github.com/dolf/env-switcher/internal/config"
 )
 
@@ -63,6 +64,32 @@ func TestReloadRetainsPreviousModelOnFailureAndWarnsOnChangedFunctions(t *testin
 // huh.Select.Options is a no-op when passed zero options (it only ever grows/replaces a
 // populated field), so the reload path must rebuild the field from scratch rather than calling
 // Options in place, or a reload down to zero environments would leave stale options on screen.
+// TestSelectionWorksAfterReload reproduces the reported bug: reload (F4/r) rebuilds the form with
+// a fresh *huh.Form, and the reported symptom was that arrow keys/Enter stopped doing anything
+// afterward — the list kept rendering, but nothing could be selected. Root cause: huh only marks a
+// form's first group active and focuses its selected field from inside Form.Init(), which a
+// reload never called on the replacement form.
+func TestSelectionWorksAfterReload(t *testing.T) {
+	old := &config.Settings{Version: 1, Envs: map[string]config.ProjectEnvironment{"old": {Project: "/tmp"}}}
+	m := New(old, "/tmp/settings", Services{Reload: func() (*config.Settings, error) {
+		return &config.Settings{Version: 1, Envs: map[string]config.ProjectEnvironment{"dev": {Project: "/tmp"}, "prod": {Project: "/tmp"}}}, nil
+	}})
+	next, cmd := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = drive(t, next.(Model), cmd)
+
+	next, cmd = m.Update(key("r"))
+	m = drive(t, next.(Model), cmd)
+	if _, ok := m.Settings.Envs["dev"]; !ok {
+		t.Fatal("reload did not replace the settings")
+	}
+
+	next, cmd = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = drive(t, next.(Model), cmd)
+	if m.Selected == "" {
+		t.Fatal("Enter did not select a project after reload")
+	}
+}
+
 func TestReloadRebuildsEmptyList(t *testing.T) {
 	old := &config.Settings{Version: 1, Envs: map[string]config.ProjectEnvironment{"only": {Project: "/tmp"}}}
 	m := New(old, "/tmp/settings", Services{Reload: func() (*config.Settings, error) {
@@ -226,6 +253,31 @@ func TestQuitAndCtrlCAbortWithoutSelecting(t *testing.T) {
 	next, cmd := m.Update(key("q"))
 	if next.(Model).Selected != "" || cmd == nil {
 		t.Fatal("q did not schedule quit without selecting")
+	}
+	// The last frame Update leaves in place is what stays behind in the terminal's scrollback
+	// once this inline (non-alt-screen) program exits — see Model.quitting's doc comment. It must
+	// render nothing, not the form/footer from just before q was pressed.
+	if v := next.(Model).render(); v != "" {
+		t.Fatalf("quitting via q left content behind that would linger after exit: %q", v)
+	}
+}
+
+// TestFormAbortRendersNothing covers the other quit path out of forwardToForm: ctrl+c, which
+// action() doesn't recognize as an app-level shortcut (unlike q/Esc, both mapped to "quit" and
+// intercepted by handleShortcut before ever reaching the form), so it reaches huh's own Quit
+// binding and produces a real huh.StateAborted.
+func TestFormAbortRendersNothing(t *testing.T) {
+	m := New(&config.Settings{Version: 1, Envs: map[string]config.ProjectEnvironment{"dev": {Project: "/tmp"}}}, "/tmp/settings", Services{})
+	// No Text field: a real ctrl+c is a control character, not printable text, and Key.String()
+	// (what huh's key.Matches actually checks) prefers Text verbatim over the modifier-aware
+	// "ctrl+c" form whenever Text is set — setting it here would silently defeat the match.
+	next, cmd := m.Update(tea.KeyPressMsg(tea.Key{Code: 'c', Mod: tea.ModCtrl}))
+	m = drive(t, next.(Model), cmd)
+	if m.form.State != huh.StateAborted {
+		t.Fatalf("ctrl+c did not produce huh.StateAborted, got %v", m.form.State)
+	}
+	if v := m.render(); v != "" {
+		t.Fatalf("aborting the form left content behind that would linger after exit: %q", v)
 	}
 }
 
