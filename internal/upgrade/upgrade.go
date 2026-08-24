@@ -60,12 +60,19 @@ func NewUpgrader(installedPath func() (string, error)) *Upgrader {
 
 // Upgrade checks the latest stable release against currentVersion and, if it's newer, downloads,
 // verifies, and atomically installs it. currentVersion is the running binary's own build-time
-// version string (see internal/app.BuildInfo.Version). The existing installed binary is left
-// exactly as it was if any step — network, checksum, extraction, or install — fails.
+// version string (see internal/app.BuildInfo.Version) — a local/dev build (unset by the release
+// workflow's ldflags, e.g. the literal "dev") doesn't parse as a semantic version, and rather than
+// refuse to compare, that's treated as "not a release, so not current": the latest stable release
+// is always installed over it. The existing installed binary is left exactly as it was if any
+// step — network, checksum, extraction, or install — fails.
 func (u *Upgrader) Upgrade(ctx context.Context, currentVersion string) (Result, error) {
-	current, err := ParseVersion(currentVersion)
-	if err != nil {
-		return Result{}, fmt.Errorf("running version %q is not a recognizable semantic version, refusing to compare: %w", currentVersion, err)
+	current, parseErr := ParseVersion(currentVersion)
+	// oldVersionLabel is what Result reports as "old": the parsed/canonical form when
+	// currentVersion is a real release version, otherwise the raw string as given (e.g. "dev") —
+	// never a blank zero-value Version.
+	oldVersionLabel := currentVersion
+	if parseErr == nil {
+		oldVersionLabel = current.String()
 	}
 
 	release, err := u.Source.LatestStable(ctx)
@@ -76,8 +83,8 @@ func (u *Upgrader) Upgrade(ctx context.Context, currentVersion string) (Result, 
 	if err != nil {
 		return Result{}, fmt.Errorf("latest release %q has an unparseable version: %w", release.TagName, err)
 	}
-	if !latest.NewerThan(current) {
-		return Result{OldVersion: current.String(), NewVersion: latest.String(), AlreadyCurrent: true}, nil
+	if parseErr == nil && !latest.NewerThan(current) {
+		return Result{OldVersion: oldVersionLabel, NewVersion: latest.String(), AlreadyCurrent: true}, nil
 	}
 
 	destPath, err := u.InstalledPath()
@@ -141,7 +148,7 @@ func (u *Upgrader) Upgrade(ctx context.Context, currentVersion string) (Result, 
 		return Result{}, fmt.Errorf("install %s: %w", destPath, err)
 	}
 
-	return Result{OldVersion: current.String(), NewVersion: latest.String(), InstalledPath: destPath}, nil
+	return Result{OldVersion: oldVersionLabel, NewVersion: latest.String(), InstalledPath: destPath}, nil
 }
 
 // reserveTempPath returns a unique path in dir (created empty, so later writers can just

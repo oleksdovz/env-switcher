@@ -260,10 +260,28 @@ func TestUpgradeUnsupportedPlatformIsActionable(t *testing.T) {
 	}
 }
 
-func TestUpgradeRejectsUnparseableCurrentVersion(t *testing.T) {
-	fx := newUpgradeFixture(t, "content", "")
-	_, err := fx.upgrader.Upgrade(t.Context(), "not-a-version")
-	if err == nil {
-		t.Fatal("expected an error for an unparseable current version")
+// TestUpgradeUnparseableCurrentVersionAlwaysInstallsLatest covers local/dev builds: main.go
+// defaults BuildInfo.Version to the literal "dev" when it's not set via release ldflags, which
+// doesn't parse as a semantic version. Rather than refuse to compare (and so refuse to upgrade
+// at all — reported as a real bug, since it left a dev build with no way to reach a release),
+// an unparseable current version is treated as "definitely not current": install latest.
+func TestUpgradeUnparseableCurrentVersionAlwaysInstallsLatest(t *testing.T) {
+	fx := newUpgradeFixture(t, "new-binary-content", "")
+	for _, currentVersion := range []string{"dev", "not-a-version", ""} {
+		t.Run(currentVersion, func(t *testing.T) {
+			result, err := fx.upgrader.Upgrade(t.Context(), currentVersion)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.AlreadyCurrent {
+				t.Fatalf("%q should never be reported as already current", currentVersion)
+			}
+			if result.OldVersion != currentVersion {
+				t.Fatalf("OldVersion = %q, want the raw %q preserved", result.OldVersion, currentVersion)
+			}
+			if result.NewVersion != "v2.0.0" || result.InstalledPath == "" {
+				t.Fatalf("unexpected result: %+v", result)
+			}
+		})
 	}
 }

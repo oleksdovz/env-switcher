@@ -57,6 +57,16 @@ supports Bash and Zsh, and installs shell integration for applying the selected 
   a shell *function* name is just a command name to bash/zsh, and both legitimately accept
   hyphens/dots/colons between segments. Function names now follow a superset rule; variable names
   are unchanged.
+- Q: `--install`, `--validate`, `--reload`, `--view`, `--rollback`, and `--uninstall` all failed
+  with "project ... is not configured" even though every command is documented as accepting an
+  equivalent `--flag` form. → A: Genuine bug — the dispatcher's switch-cases for those six commands
+  only matched the bare word, so their `--flag` form silently fell through to the "switch to a
+  project named X" default case. Fixed to match both forms for every documented command; a
+  regression test now asserts each one does.
+- Q: `env-switcher upgrade` failed outright on a locally built ("dev") binary, since "dev" isn't a
+  semantic version to compare against — should it? → A: No — that left dev builds with no way to
+  reach a release at all. An unparseable running version is now treated as definitely not current,
+  so the latest stable release is always installed over it (see FR-037).
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -404,7 +414,10 @@ failed download each leave the previously installed executable untouched.
 - **FR-037**: The upgrade check MUST determine the latest release using semantic-version
   comparison of non-draft, non-prerelease releases only — never simply the most recently published
   release — and MUST report clearly, without downloading or installing anything, when the running
-  version is already current.
+  version is already current. A running version that does not itself parse as a semantic version
+  (a local/dev build, e.g. the literal "dev") MUST NOT be reported as already current or refuse to
+  compare — it MUST be treated as definitely not current, so the latest stable release is always
+  installed over it.
 - **FR-038**: The upgrade action MUST select the release asset matching the running operating
   system and architecture, and MUST fail with an actionable error naming both the sought platform
   and the platforms the release actually publishes when no match exists.

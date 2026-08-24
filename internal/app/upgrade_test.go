@@ -9,10 +9,12 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/dolf/env-switcher/internal/testutil"
 	"github.com/dolf/env-switcher/internal/upgrade"
 )
 
@@ -118,6 +120,61 @@ func TestUpgradeCommandReportsSuccess(t *testing.T) {
 	}
 	out := stdout.String()
 	if !strings.Contains(out, "v1.0.0 -> v2.0.0") {
+		t.Fatalf("output missing old/new version transition: %q", out)
+	}
+	if !strings.Contains(out, "installed at") {
+		t.Fatalf("output missing installed path: %q", out)
+	}
+}
+
+// TestUpgradeCommandNeverTouchesCurrentEnv addresses a second report alongside the "dev" version
+// bug: after running `env-switcher upgrade`, a previously-switched project appeared reactivated
+// (its shell-cmd hooks visibly re-ran). upgradeCommand and the internal/upgrade package it calls
+// never reference current-env or switchCommand at all (grep confirms it) — reactivation after a
+// non-switch command is exactly the wrapper bug fixed in TestWrapperDoesNotReactivateOnNonSwitch
+// Commands and TestHelpDoesNotReactivateProject; this proves the Go side of `upgrade` specifically
+// carries no such risk, so a real report of it recurring means the *installed* shell wrapper on
+// that machine predates the fix (env-switcher install/upgrade re-syncs it) — not a code regression
+// here.
+func TestUpgradeCommandNeverTouchesCurrentEnv(t *testing.T) {
+	home := testutil.IsolatedHome(t)
+	dir := filepath.Join(home, ".env-switcher")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	currentEnv := filepath.Join(dir, "current-env")
+	preexisting := "export SOME_VAR='from-a-previous-switch'\n"
+	if err := os.WriteFile(currentEnv, []byte(preexisting), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	u := newFixtureUpgrader(t, "binary-content")
+	var stdout, stderr bytes.Buffer
+	if err := upgradeCommand(t.Context(), u, "v1.0.0", &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := os.ReadFile(currentEnv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != preexisting {
+		t.Fatalf("upgrade modified current-env: got %q, want unchanged %q", got, preexisting)
+	}
+}
+
+// TestUpgradeCommandWorksForLocalDevBuild reproduces the reported bug: a locally built binary
+// (main.go's default BuildInfo.Version, "dev") could never upgrade at all, since "dev" isn't a
+// semantic version to compare against. It must succeed, installing whatever the latest stable
+// release is.
+func TestUpgradeCommandWorksForLocalDevBuild(t *testing.T) {
+	u := newFixtureUpgrader(t, "binary-content")
+	var stdout, stderr bytes.Buffer
+	if err := upgradeCommand(t.Context(), u, "dev", &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "dev -> v2.0.0") {
 		t.Fatalf("output missing old/new version transition: %q", out)
 	}
 	if !strings.Contains(out, "installed at") {
