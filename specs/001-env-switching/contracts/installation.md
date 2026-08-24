@@ -27,8 +27,13 @@ env-switcher() {
   __ENV_SWITCHER_TARGET_SHELL=<bash|zsh> "$HOME/.env-switcher/bin/env-switcher" "$@"
   __env_switcher_status=$?
   [ -f "$__env_switcher_payload" ] && source "$__env_switcher_payload"
+  _env_switcher_register_completion
   return $__env_switcher_status
 }
+
+_env_switcher_completion() { ... }          # see "Tab Completion" below
+_env_switcher_register_completion() { ... } # complete -F ... (Bash) / compdef ... (Zsh)
+_env_switcher_register_completion
 # <<< env-switcher managed block v1 <<<
 ```
 
@@ -43,7 +48,32 @@ Zero or one complete block is valid before reconciliation. Multiple, nested, rev
 markers fail closed; the installer never guesses a deletion range. The block is reconciled to the
 current template either by explicitly running `install` again after a binary upgrade, or by the
 self-install trigger below; the product never edits shell startup files as a side effect of any
-other command (`list`, `get`, `validate`, ...).
+other command (`list`, `get`, `validate`, ...). A **fresh** install (no existing markers) inserts
+the block 5 lines before the end of the profile rather than strictly appending at the very end —
+if the profile has 5 or fewer lines, the block goes at the very beginning instead — so content the
+user deliberately put last (a prompt theme finalization, another tool's `eval "$(... init)"`, ...)
+keeps running after this block, not before it. Reconciling an *existing* block never moves it; it's
+rewritten exactly where the markers already were.
+
+## Tab Completion
+
+`_env_switcher_completion` (Bash: registered via `complete -F`; Zsh: via `compdef`, calling
+`compadd --`) reads project names fresh on every completion attempt — from `settings.yaml` via
+`yq -r '.envs | keys | .[]'` if `yq` is installed, falling back to the installed `env-switcher`
+executable's own `list` output (invoked directly, never through the `env-switcher()` function
+above) only once `settings.yaml` already exists, so a bare TAB press can never create one. Missing
+`yq`, a missing executable, a missing/empty/invalid `settings.yaml` — any combination — degrades to
+no candidates and no error, never a broken prompt or a stray `-`-prefixed candidate.
+
+It's defined at the top level of the profile, not nested inside `env-switcher()`: a function
+defined only inside another function doesn't exist to `complete`/`compdef` until that outer
+function has actually run once, so nesting it would mean completion only starts working after the
+first invocation in a session. `_env_switcher_register_completion` re-runs the registration itself
+at the end of every `env-switcher()` call, not only once at shell startup, because — in Zsh
+specifically — a configured `shell-cmd` that calls `compinit` again (a common way to reload some
+other tool's completions right after a switch) wipes Zsh's entire completion registry, silently
+losing this binding along with everything else; re-registering after every invocation is cheap (no
+process spawned) and self-heals regardless of what caused the loss.
 
 ## Self-Install Trigger
 

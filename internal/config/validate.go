@@ -5,18 +5,46 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
 var identifierRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
-// functionNameRE is deliberately more permissive than identifierRE: a shell *variable* name must
-// be a plain POSIX identifier, but a shell *function* name is just a command name to bash/zsh, and
-// both shells legitimately accept hyphens/dots/colons between segments (e.g. "k-load", "git.foo").
-// This only keeps the character set sane — it must start with a letter/underscore, so it can never
-// be confused with an option flag — and it's shell.ValidateFunction's actual bash -n/zsh -n parse
-// that's the authority on whether a given name is syntactically acceptable to the target shell.
-var functionNameRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*([.:-][A-Za-z0-9_]+)*$`)
+// functionNameMetachars are the characters that would change what a shell actually parses/runs if
+// they appeared unquoted in a function name — the name is spliced verbatim into `name() { body }`
+// in the real (non-`-n`) activation script, so any of these could turn one function definition
+// into something else entirely: a statement separator (making "k;load" define a function named
+// "load" and separately try to run bare command "k" — bash -n reports that as syntactically fine,
+// since it's parsing two valid statements, not one invalid name), a redirection/pipe, a quote or
+// backtick or "$" that starts an expansion, a brace or bracket, or whitespace/control bytes.
+//
+// Everything else is allowed, including any Unicode letter and shell-safe punctuation that isn't
+// in this list (bash and zsh both accept far more in a function name than a hand-maintained
+// allowlist could keep up with — confirmed empirically: unicode letters, emoji, and "+@%~#!"
+// all define a function under the exact literal name given). shell.ValidateFunction's actual
+// bash -n/zsh -n parse against the real target shell remains the final authority beyond this.
+const functionNameMetachars = " \t\n\r\v\f;&|()<>*?[]\\\"'`${}="
+
+// validFunctionNameStart reports whether r may start a function name: a letter (any script) or
+// underscore — never a digit or punctuation, so a name can never be confused with an option flag
+// or a number, matching ordinary naming convention.
+func validFunctionNameStart(r rune) bool { return r == '_' || unicode.IsLetter(r) }
+
+func isValidFunctionName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for i, r := range name {
+		if i == 0 && !validFunctionNameStart(r) {
+			return false
+		}
+		if r == utf8.RuneError || r < 0x20 || r == 0x7f || strings.ContainsRune(functionNameMetachars, r) {
+			return false
+		}
+	}
+	return true
+}
 
 // ReservedProjectNames are CLI keywords that double as the bare-word "switch to <env>" form
 // (e.g. `env-switcher list`). A project sharing one of these names would be unreachable through
@@ -150,7 +178,7 @@ func validateVarName(path, name string) error {
 }
 
 func validateFunctionName(path, name string) error {
-	if !functionNameRE.MatchString(name) || strings.HasPrefix(name, "__ENV_SWITCHER_") {
+	if !isValidFunctionName(name) || strings.HasPrefix(name, "__ENV_SWITCHER_") {
 		return fmt.Errorf("%s.%s: invalid or reserved function name", path, name)
 	}
 	return nil

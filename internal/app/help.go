@@ -20,7 +20,7 @@ Usage:
   env-switcher install          install or update shell integration
   env-switcher rollback         restore the previous shell profile backup
   env-switcher uninstall        remove the managed shell integration
-  env-switcher upgrade          install the latest compatible release
+  env-switcher upgrade          check for, and install, the latest compatible release
   env-switcher version          print build metadata
   env-switcher help             show this help
 
@@ -28,6 +28,9 @@ Every command above also accepts an equivalent "--flag" form (--list, --get, --e
 --reload, --view, --install, --rollback, --uninstall, --upgrade, --version, --select) for the
 same action. TUI keys: Enter select, F2/v view, F3/e edit, F4/r reload, F5/i install, F6 upgrade,
 F10/q exit.
+
+install/rollback/uninstall/upgrade show what they're about to do and ask for confirmation before
+changing anything; pass --yes (or -y for upgrade) to skip the prompt for scripted use.
 `
 
 func printHelp(stdout io.Writer) { _, _ = fmt.Fprint(stdout, helpText) }

@@ -260,6 +260,68 @@ func TestUpgradeUnsupportedPlatformIsActionable(t *testing.T) {
 	}
 }
 
+func TestCheckReportsAvailableUpgradeWithoutDownloading(t *testing.T) {
+	fx := newUpgradeFixture(t, "content", "")
+	check, err := fx.upgrader.Check(t.Context(), "v1.0.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !check.UpgradeAvailable || check.CurrentLabel != "v1.0.0" || check.NewVersion != "v2.0.0" || !check.CurrentIsRelease {
+		t.Fatalf("unexpected check result: %+v", check)
+	}
+	if _, err := os.Stat(fx.destPath); !os.IsNotExist(err) {
+		t.Fatalf("Check must not install anything, stat err=%v", err)
+	}
+}
+
+func TestCheckReportsAlreadyCurrent(t *testing.T) {
+	fx := newUpgradeFixture(t, "content", "")
+	check, err := fx.upgrader.Check(t.Context(), "v2.0.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if check.UpgradeAvailable {
+		t.Fatalf("v2.0.0 should already be current: %+v", check)
+	}
+}
+
+func TestApplyUsesTheGivenReleaseWithoutRequeryingSource(t *testing.T) {
+	fx := newUpgradeFixture(t, "content", "")
+	check, err := fx.upgrader.Check(t.Context(), "v1.0.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Swap the source out after Check: Apply must not call LatestStable again, or this would
+	// either error or (worse) silently pick a different release than what Check reported.
+	fx.upgrader.Source = fakeReleaseSource{err: fmt.Errorf("Apply must not query the release source")}
+	result, err := fx.upgrader.Apply(t.Context(), check.Release, check.CurrentLabel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.NewVersion != "v2.0.0" || result.OldVersion != "v1.0.0" {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+}
+
+func TestApplyReportsProgress(t *testing.T) {
+	fx := newUpgradeFixture(t, "content", "")
+	check, err := fx.upgrader.Check(t.Context(), "v1.0.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stages []string
+	fx.upgrader.Progress = func(stage string) { stages = append(stages, stage) }
+	if _, err := fx.upgrader.Apply(t.Context(), check.Release, check.CurrentLabel); err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(stages, " | ")
+	for _, want := range []string{"download", "verif", "install"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("progress stages missing %q: %v", want, stages)
+		}
+	}
+}
+
 // TestUpgradeUnparseableCurrentVersionAlwaysInstallsLatest covers local/dev builds: main.go
 // defaults BuildInfo.Version to the literal "dev" when it's not set via release ldflags, which
 // doesn't parse as a semantic version. Rather than refuse to compare (and so refuse to upgrade

@@ -104,7 +104,7 @@ func newFixtureUpgrader(t *testing.T, content string) *upgrade.Upgrader {
 func TestUpgradeCommandReportsAlreadyCurrent(t *testing.T) {
 	u := newFixtureUpgrader(t, "binary-content")
 	var stdout, stderr bytes.Buffer
-	if err := upgradeCommand(t.Context(), u, "v2.0.0", &stdout, &stderr); err != nil {
+	if err := upgradeCommand(t.Context(), u, "v2.0.0", []string{"--yes"}, nil, &stdout, &stderr); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(stdout.String(), "already up to date") || !strings.Contains(stdout.String(), "v2.0.0") {
@@ -115,7 +115,7 @@ func TestUpgradeCommandReportsAlreadyCurrent(t *testing.T) {
 func TestUpgradeCommandReportsSuccess(t *testing.T) {
 	u := newFixtureUpgrader(t, "binary-content")
 	var stdout, stderr bytes.Buffer
-	if err := upgradeCommand(t.Context(), u, "v1.0.0", &stdout, &stderr); err != nil {
+	if err := upgradeCommand(t.Context(), u, "v1.0.0", []string{"--yes"}, nil, &stdout, &stderr); err != nil {
 		t.Fatal(err)
 	}
 	out := stdout.String()
@@ -125,6 +125,84 @@ func TestUpgradeCommandReportsSuccess(t *testing.T) {
 	if !strings.Contains(out, "installed at") {
 		t.Fatalf("output missing installed path: %q", out)
 	}
+}
+
+// TestUpgradeCommandShowsDetailBeforeActing proves the CLI narrates what it found — current
+// version, release source, and the latest version — before doing anything, as requested: not
+// just a terse "already up to date" or "upgraded".
+func TestUpgradeCommandShowsDetailBeforeActing(t *testing.T) {
+	u := newFixtureUpgrader(t, "binary-content")
+	var stdout, stderr bytes.Buffer
+	if err := upgradeCommand(t.Context(), u, "v1.0.0", []string{"--yes"}, nil, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	out := stderr.String()
+	for _, want := range []string{"v1.0.0", "v2.0.0", upgrade.SourceURL} {
+		if !strings.Contains(out, want) {
+			t.Errorf("stderr missing %q: %s", want, out)
+		}
+	}
+}
+
+// TestUpgradeCommandPromptsAndSkipsOnDecline proves declining the confirmation (the default
+// without --yes) does not install anything, and is reported as a skip, not a hard failure.
+func TestUpgradeCommandPromptsAndSkipsOnDecline(t *testing.T) {
+	u := newFixtureUpgrader(t, "binary-content")
+	var stdout, stderr bytes.Buffer
+	err := upgradeCommand(t.Context(), u, "v1.0.0", nil, strings.NewReader("n\n"), &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected a cancellation error when the upgrade is declined")
+	}
+	if !strings.Contains(err.Error(), "skip") {
+		t.Fatalf("error does not read as a skip: %v", err)
+	}
+	if strings.Contains(stdout.String(), "upgraded") {
+		t.Fatalf("declined upgrade still reported success: %q", stdout.String())
+	}
+	// Apply's os.MkdirAll(destDir, ...) is the first thing that would ever create bin/ — a
+	// decline must never reach that, so it must not exist at all.
+	binDir := filepath.Dir(mustInstalledPath(t, u))
+	if _, statErr := os.Stat(binDir); !os.IsNotExist(statErr) {
+		t.Fatalf("declined upgrade touched the install directory: stat err=%v", statErr)
+	}
+}
+
+// TestUpgradeCommandPromptsAndProceedsOnAccept proves accepting via stdin ("y"), without --yes,
+// installs exactly like the --yes path does.
+func TestUpgradeCommandPromptsAndProceedsOnAccept(t *testing.T) {
+	u := newFixtureUpgrader(t, "binary-content")
+	var stdout, stderr bytes.Buffer
+	if err := upgradeCommand(t.Context(), u, "v1.0.0", nil, strings.NewReader("y\n"), &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout.String(), "v1.0.0 -> v2.0.0") {
+		t.Fatalf("accepted upgrade did not report success: %q", stdout.String())
+	}
+}
+
+// TestUpgradeCommandNarratesProgress proves each stage of the actual install is reported, not
+// just a single terse final line.
+func TestUpgradeCommandNarratesProgress(t *testing.T) {
+	u := newFixtureUpgrader(t, "binary-content")
+	var stdout, stderr bytes.Buffer
+	if err := upgradeCommand(t.Context(), u, "v1.0.0", []string{"--yes"}, nil, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	out := stderr.String()
+	for _, want := range []string{"downloading", "verifying", "installing"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("stderr missing progress stage %q: %s", want, out)
+		}
+	}
+}
+
+func mustInstalledPath(t *testing.T, u *upgrade.Upgrader) string {
+	t.Helper()
+	p, err := u.InstalledPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
 }
 
 // TestUpgradeCommandNeverTouchesCurrentEnv addresses a second report alongside the "dev" version
@@ -150,7 +228,7 @@ func TestUpgradeCommandNeverTouchesCurrentEnv(t *testing.T) {
 
 	u := newFixtureUpgrader(t, "binary-content")
 	var stdout, stderr bytes.Buffer
-	if err := upgradeCommand(t.Context(), u, "v1.0.0", &stdout, &stderr); err != nil {
+	if err := upgradeCommand(t.Context(), u, "v1.0.0", []string{"--yes"}, nil, &stdout, &stderr); err != nil {
 		t.Fatal(err)
 	}
 
@@ -170,7 +248,7 @@ func TestUpgradeCommandNeverTouchesCurrentEnv(t *testing.T) {
 func TestUpgradeCommandWorksForLocalDevBuild(t *testing.T) {
 	u := newFixtureUpgrader(t, "binary-content")
 	var stdout, stderr bytes.Buffer
-	if err := upgradeCommand(t.Context(), u, "dev", &stdout, &stderr); err != nil {
+	if err := upgradeCommand(t.Context(), u, "dev", []string{"--yes"}, nil, &stdout, &stderr); err != nil {
 		t.Fatal(err)
 	}
 	out := stdout.String()

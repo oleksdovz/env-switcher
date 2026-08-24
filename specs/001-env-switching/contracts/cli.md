@@ -9,7 +9,7 @@ the installed shell function can forward `"$@"` regardless of which style was ty
 |---------|-------|---------|-----------------|
 | `env-switcher` | | Self-install (see [installation.md](installation.md)) if needed, then open the TUI | Renders on stdout/stderr like any terminal program; a selection writes `current-env` (see [shell-payload.md](shell-payload.md)) |
 | `env-switcher <project>` | `--select <project>` | Switch directly, no TUI | Writes `current-env` on success; non-zero exit and no change to `current-env` on failure |
-| `env-switcher list` | `--list`, `ls` | List configured projects | Names and directories on stdout; no secrets, no warning |
+| `env-switcher list` | `--list`, `ls` | List configured projects | Names and directories on stdout; no secrets, no warning. Also the installed shell completion's fallback data source when `yq` isn't available — see [installation.md](installation.md#tab-completion) |
 | `env-switcher get <project>` | `--get <project>` | Show one project's resolved configuration | stderr advisory, then unmasked values/bodies on stdout; no blocking prompt (stays script-safe) |
 | `env-switcher edit [project]` | `--edit [project]` | Open settings in the resolved editor | Opens the whole file; an unknown `project` is a non-fatal stderr note |
 | `env-switcher validate` | `--validate` | Validate settings | Diagnostics only |
@@ -18,12 +18,17 @@ the installed shell function can forward `"$@"` regardless of which style was ty
 | `env-switcher install` | `--install` | Install/update integration | Confirmation required unless explicit approval flag |
 | `env-switcher rollback` | `--rollback` | Restore verified backup | Selection and confirmation required |
 | `env-switcher uninstall` | `--uninstall` | Remove managed integration | Preserve settings/backups by default |
-| `env-switcher upgrade` | `--upgrade` | Install the latest compatible stable release | Progress/result on stdout; never writes `current-env` |
+| `env-switcher upgrade` | `--upgrade` | Check, then (after confirmation, or `--yes`/`-y`) install the latest compatible stable release | Check detail and step narration on stderr; final result on stdout; never writes `current-env` |
 | `env-switcher version` | `--version` | Show build metadata | Human stdout |
 | `env-switcher help` | `--help`, `-h` | Show usage | Human stdout |
 
 A bare word matching none of the above is treated as `<project>`. `config.Validate` rejects
-project names that collide with a command word, so this is never ambiguous.
+project names that collide with a command word, so this is never ambiguous. A `<project>` that
+isn't configured is a `switch` failure whose message lists what actually is configured (or, if
+nothing is, says so) and points at `list`/`ls` — never a bare "not configured".
+
+`install`/`rollback`/`uninstall` print a detail block (shell, profile, and — for `install` —
+executable path) to stderr before their confirmation prompt.
 
 Only `env-switcher` (bare), `env-switcher <project>`/`--select`, and a successfully resolved
 switch ever write `current-env`. Every row above besides those — `upgrade` included — is read-only

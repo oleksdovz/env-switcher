@@ -41,12 +41,22 @@ env-switcher install --shell bash
 ```
 
 Installation copies the executable to `~/.env-switcher/bin/env-switcher` and atomically reconciles
-one managed `env-switcher` shell function in `.zshrc` or `.bashrc`. Existing profiles are backed up
-under `~/.env-switcher/backups/`. Symlink profiles and malformed markers fail closed. Running
-`install` again after upgrading the binary re-syncs the managed block to the latest wrapper. If an
-executable from before the `bin/` convention existed (`~/.env-switcher/env-switcher`), it's removed
-once the canonical `bin/env-switcher` copy is confirmed in place — never before, and never if it's
-a symlink or owned by a different user.
+one managed `env-switcher` shell function — plus its project-name tab-completion — in `.zshrc` or
+`.bashrc`. A fresh install inserts the block 5 lines before the end of the profile rather than
+strictly appending at the end, so a user's own trailing lines (a prompt theme, another tool's
+`eval "$(... init)"`) keep running after it; reconciling an existing block never moves it. Existing
+profiles are backed up under `~/.env-switcher/backups/`. Symlink profiles and malformed markers
+fail closed. Running `install` again after upgrading the binary re-syncs the managed block to the
+latest wrapper. If an executable from before the `bin/` convention existed
+(`~/.env-switcher/env-switcher`), it's removed once the canonical `bin/env-switcher` copy is
+confirmed in place — never before, and never if it's a symlink or owned by a different user.
+
+Tab-completion (`env-switcher <TAB>`) reads project names from `settings.yaml` via `yq`, falling
+back to `env-switcher list` itself if `yq` isn't installed (only once `settings.yaml` already
+exists, so completion can never create one); either way it degrades to no candidates and no error
+if nothing is available, and never touches `current-env` or runs anything configured. See the
+[README](../README.md#shell-completion) for the full picture, including why the completion
+function lives at the top level of the profile and re-registers itself on every invocation.
 
 ## Upgrade
 

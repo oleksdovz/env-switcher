@@ -32,13 +32,31 @@ func TestUpgradeIsAReservedProjectName(t *testing.T) {
 	}
 }
 
-// TestShellFunctionNamesAllowShellSafeSeparators guards against re-applying the stricter
-// variable-identifier regex to function names: bash/zsh function names are command names, not
-// variable identifiers, and both shells accept hyphens/dots/colons between segments (e.g.
-// "k-load", reported as incorrectly rejected before this fix).
-func TestShellFunctionNamesAllowShellSafeSeparators(t *testing.T) {
+// TestShellFunctionNamesAreDynamicNotAHardcodedAllowlist guards against re-applying an
+// approximate, hand-maintained allowlist to function names: bash/zsh function names are command
+// names, not variable identifiers, and accept far more than any fixed pattern is likely to
+// enumerate — confirmed empirically against real bash/zsh (see internal/config/validate.go's
+// functionNameMetachars), not guessed. Every one of these was rejected at some point by an
+// earlier, stricter version of this same fix.
+func TestShellFunctionNamesAreDynamicNotAHardcodedAllowlist(t *testing.T) {
 	body := "echo ok"
-	for _, name := range []string{"k-load", "git.foo", "my:thing", "a-b-c", "plain"} {
+	names := []string{
+		"k-load", "git.foo", "my:thing", "a-b-c", "plain",
+		"k----load",    // repeated separators
+		"load-",        // trailing separator
+		"lo--ad",       // adjacent separators mid-name
+		"a.-.:b",       // mixed separators, adjacent
+		"with/slash",   // a real bash/zsh function can be named with a slash
+		"k+load",       // and '+'
+		"k@load",       // and '@'
+		"k%load",       // and '%'
+		"k~load",       // and '~'
+		"k#load",       // and '#' (mid-word — not a comment start, which requires word-start)
+		"k!load",       // and '!'
+		"función_ñame", // and any Unicode letter, not just ASCII
+		"ünïcode_start",
+	}
+	for _, name := range names {
 		s := &Settings{Version: 1, Envs: map[string]ProjectEnvironment{"dev": {Project: "/tmp", ShellFunctions: map[string]string{name: body}}}}
 		if err := Validate(s); err != nil {
 			t.Errorf("function name %q rejected: %v", name, err)
@@ -46,9 +64,18 @@ func TestShellFunctionNamesAllowShellSafeSeparators(t *testing.T) {
 	}
 }
 
-func TestShellFunctionNamesStillRejectUnsafeForms(t *testing.T) {
+// TestShellFunctionNamesStillRejectShellMetacharacters proves the permissive rule stayed a strict
+// denylist of actual shell metacharacters, not merely "whatever bash -n accepts": the name is
+// spliced unescaped into `name() { body }` in the real (non-`-n`) activation script, and bash -n
+// reports "k;load" as syntactically fine too — but only because it parses as two statements (`k`,
+// then a function actually named "load"), not because "k;load" is a valid single function name.
+func TestShellFunctionNamesStillRejectShellMetacharacters(t *testing.T) {
 	body := "echo ok"
-	for _, name := range []string{"-load", "load-", "lo--ad", "with space", "with/slash", "1load"} {
+	for _, name := range []string{
+		"-load", "1load", // must start with a letter/underscore
+		"with space", "k;load", "k&load", "k|load", "k(load)", "k<load", "k>load",
+		"k$load", "k`load`", "k\"load", "k'load", "k\\load", "k=load", "k{load}", "k[load]", "k*load", "k?load",
+	} {
 		s := &Settings{Version: 1, Envs: map[string]ProjectEnvironment{"dev": {Project: "/tmp", ShellFunctions: map[string]string{name: body}}}}
 		if err := Validate(s); err == nil {
 			t.Errorf("function name %q should have been rejected", name)

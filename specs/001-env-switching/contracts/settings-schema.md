@@ -82,11 +82,21 @@ include both the merged `k_load` and its own `k_ns`; its `shell-cmd` runs after 
   document's total size after every alias is resolved must not exceed 8 MiB (independent of the
   1 MiB raw-file cap).
 - Variable names match `[A-Za-z_][A-Za-z0-9_]*` (a POSIX identifier — required for `export`) and
-  cannot use `__ENV_SWITCHER_`. Function names are a superset: the same identifier core, optionally
-  followed by `.`/`:`/`-`-separated segments (e.g. `k-load`, `git.foo`) — bash and zsh both accept
-  these as command names, unlike variable names — and the same `__ENV_SWITCHER_` prefix is still
-  reserved. `shell.ValidateFunction`'s `bash -n`/`zsh -n` parse remains the actual authority on
-  whether a given name is syntactically acceptable to the target shell.
+  cannot use `__ENV_SWITCHER_`. Function names are deliberately dynamic rather than a fixed
+  pattern: a shell function name is a command name, not a variable identifier, and bash/zsh both
+  accept far more than any hand-maintained allowlist is likely to enumerate (confirmed
+  empirically — hyphens, dots, colons, slashes, `+`/`@`/`%`/`~`/`#`/`!`, and non-ASCII letters, in
+  any arrangement, adjacent or repeated, e.g. `k-load`, `k----load`, `with/slash`,
+  `función_ñame`). Rather than enumerate what's allowed, validation denies only what's unsafe: a
+  leading digit/punctuation (so a name can't be confused with an option flag), whitespace/control
+  bytes, and shell metacharacters — statement separators/redirection/pipes (`;&|()<>`), quoting/
+  expansion (`` $`"'\ ``), braces/brackets (`{}[]`), globbing (`*?`), and `=` — that would change
+  what the name actually parses as once spliced unescaped into `name() { body }` in the real
+  activation script; `bash -n` calls `k;load` syntactically fine too, for example, but only
+  because it parses as two statements, not because `k;load` is a valid single function name. The
+  same `__ENV_SWITCHER_` prefix is reserved for both kinds of name.
+  `shell.ValidateFunction`'s `bash -n`/`zsh -n` parse against the real target shell remains the
+  actual authority beyond that denylist.
 - Project names additionally cannot be a reserved CLI command word (`help`, `list`, `ls`, `edit`,
   `get`, `version`, `validate`, `install`, `rollback`, `uninstall`, `reload`, `view`), since a
   project sharing one would be unreachable through `env-switcher <project>`.

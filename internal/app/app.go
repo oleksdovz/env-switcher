@@ -86,7 +86,7 @@ func (a *App) Run(ctx context.Context, args []string, stdin io.Reader, stdout, s
 		}
 		return OutcomeSuccess.ExitCode()
 	case "upgrade", "--upgrade":
-		if err := upgradeCommand(ctx, newUpgrader(), a.build.Version, stdout, stderr); err != nil {
+		if err := upgradeCommand(ctx, newUpgrader(), a.build.Version, args[1:], stdin, stdout, stderr); err != nil {
 			return report(stderr, err)
 		}
 		return OutcomeSuccess.ExitCode()

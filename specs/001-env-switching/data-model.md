@@ -77,16 +77,24 @@ shared/project `shell-functions`/`shell-cmd` as an ordinary exported shell varia
 
 | Field | Type | Rules |
 |-------|------|-------|
-| name | string | `[A-Za-z_][A-Za-z0-9_]*`, optionally followed by `.`/`:`/`-`-separated segments (e.g. `k-load`); reserved internal prefix rejected |
+| name | string | A letter (any script) or `_`, then any characters except shell metacharacters/whitespace/control bytes (e.g. `k----load`, `with/slash`, `función_ñame`); reserved internal prefix rejected |
 | body | string | One body, offered to whichever shell is active; UTF-8 trusted code; non-empty; NUL prohibited; maximum 256 KiB |
 | source | enum | `shared` or `project`; derived |
 
-A function name is deliberately a superset of the Environment Variable Definition's identifier
-rule: bash/zsh function names are command names, not variable identifiers, and both shells accept
-`k-load`-style hyphenated (or dotted/colon-separated) names, unlike a variable name (which must
-stay a plain POSIX identifier to be a valid `export` target). `shell.ValidateFunction`'s
-`bash -n`/`zsh -n` parse remains the actual authority on whether a given name is syntactically
-acceptable to the target shell — the schema-level rule only keeps the character set sane.
+A function name is deliberately dynamic, not a fixed pattern of allowed forms: bash/zsh function
+names are command names, not variable identifiers, and both shells accept far more than any
+hand-maintained allowlist is likely to enumerate — confirmed empirically, including hyphens,
+dots, colons, slashes, and non-ASCII letters, in any arrangement, adjacent or repeated (e.g.
+`k----load`, `with/slash`) — unlike a variable name (which must stay a plain POSIX identifier to
+be a valid `export` target). Rather than enumerate what's allowed, validation denies what's
+unsafe: whitespace/control bytes and the shell metacharacters that would change what the spliced
+`name() { body }` in the real activation script actually parses as (statement separators/
+redirection/pipes, quoting/backtick/`$`, braces/brackets, `=`) — e.g. `bash -n` calls `k;load`
+syntactically fine too, but only because it parses as two statements, not one function actually
+named `k;load`, which is exactly what the denylist exists to reject. Everything not on that
+denylist is accepted without the schema needing to know about it in advance;
+`shell.ValidateFunction`'s `bash -n`/`zsh -n` parse against the real target shell remains the
+authority beyond that.
 
 There is no per-shell body split: one body is syntax-checked against, and offered to, whichever
 shell is active at switch time. A function that genuinely needs different behavior per shell

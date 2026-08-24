@@ -3,6 +3,8 @@ package app
 import (
 	"fmt"
 	"io"
+	"sort"
+	"strings"
 
 	"github.com/dolf/env-switcher/internal/config"
 	"github.com/dolf/env-switcher/internal/environment"
@@ -37,6 +39,9 @@ func switchCommand(shellName, project string, stdout io.Writer) error {
 	if err != nil {
 		return &Error{Outcome: OutcomeConfiguration, Op: "switch", Message: err.Error()}
 	}
+	if _, ok := settings.Envs[project]; !ok {
+		return unconfiguredProjectError(settings, project)
+	}
 	if config.HasFunctions(settings) && !config.IsAcknowledged(config.FunctionDigest(settings)) {
 		return &Error{Outcome: OutcomeSecurity, Op: "switch", Message: "trusted shell functions changed; open env-switcher and acknowledge the warning"}
 	}
@@ -68,6 +73,29 @@ func switchCommand(shellName, project string, stdout io.Writer) error {
 	}
 	_, _ = fmt.Fprintf(stdout, "switched to %s\n", project)
 	return nil
+}
+
+// unconfiguredProjectError builds an actionable error for a project name that isn't in settings —
+// naming the mistake plainly, listing what actually is configured (so the fix is usually just
+// picking the right name off the list), and pointing at `list` to see it again outside an error.
+func unconfiguredProjectError(settings *config.Settings, project string) *Error {
+	var b strings.Builder
+	fmt.Fprintf(&b, "⚠ project %q is not configured", project)
+	names := make([]string, 0, len(settings.Envs))
+	for name := range settings.Envs {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	if len(names) == 0 {
+		b.WriteString("\n\nNo projects are configured yet. Add one to settings.yaml (`env-switcher edit`), then run `env-switcher list` to confirm.")
+	} else {
+		b.WriteString("\n\nConfigured projects:\n")
+		for _, name := range names {
+			fmt.Fprintf(&b, "  - %s\n", name)
+		}
+		b.WriteString("\nRun `env-switcher list` (or `ls`) to see this list again.")
+	}
+	return &Error{Outcome: OutcomeOperation, Op: "switch", Message: b.String()}
 }
 
 // switchArgs parses `[--shell bash|zsh] <project>` used by the bare-CLI switch form.

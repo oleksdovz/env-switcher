@@ -63,6 +63,55 @@ hello_env_switcher
 
 func shellQuoteForTest(s string) string { q, _ := shell.Quote(s); return q }
 
+// TestDynamicFunctionNamesActuallyCallable proves shell-legal-but-unusual function names — not
+// just plain identifiers — round-trip through the real activation script: defined by shell.Render
+// and then genuinely callable by that exact name in a real shell, not merely accepted by
+// config.Validate. Covers what was reported rejected across three rounds of this same fix:
+// repeated separators, a slash, and a non-ASCII letter.
+func TestDynamicFunctionNamesActuallyCallable(t *testing.T) {
+	names := []string{"k----load", "with/slash", "función_ñame"}
+	for _, shellName := range []string{"bash", "zsh"} {
+		shellName := shellName
+		t.Run(shellName, func(t *testing.T) {
+			if _, err := exec.LookPath(shellName); err != nil {
+				t.Skip(shellName + " unavailable")
+			}
+			var funcs []environment.Function
+			var calls strings.Builder
+			for _, name := range names {
+				funcs = append(funcs, environment.Function{Name: name, Body: "printf 'called:%s\\n' " + shellQuoteForTest(name)})
+				calls.WriteString(shellQuoteForTest(name) + "\n") // invoke by the literal name, quoted the same way any word would be
+			}
+			effective := &environment.Effective{Project: "dev", Shell: shellName, Functions: funcs}
+			payload, err := shell.Render(effective)
+			if err != nil {
+				t.Fatal(err)
+			}
+			script := `payload=$(cat)
+apply_payload() { builtin eval -- "$payload"; }
+apply_payload || exit $?
+` + calls.String()
+			cmd := exec.Command(shellName)
+			if shellName == "bash" {
+				cmd.Args = []string{shellName, "--noprofile", "--norc", "-c", script}
+			} else {
+				cmd.Args = []string{shellName, "-f", "-c", script}
+			}
+			cmd.Stdin = strings.NewReader(payload)
+			var out, stderr bytes.Buffer
+			cmd.Stdout, cmd.Stderr = &out, &stderr
+			if err := cmd.Run(); err != nil {
+				t.Fatalf("activation/call failed: %v stderr=%s", err, stderr.String())
+			}
+			for _, name := range names {
+				if !strings.Contains(out.String(), "called:"+name) {
+					t.Errorf("function %q was not called correctly; output=%q", name, out.String())
+				}
+			}
+		})
+	}
+}
+
 // TestShellCmdsRunSharedThenProjectAfterCommit proves shell-cmd hooks execute in the documented
 // order (shared, then project), after variables/functions are already applied, and that a
 // failing hook does not prevent the rest of the script (including the other hook) from running.

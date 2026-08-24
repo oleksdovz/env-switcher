@@ -57,6 +57,22 @@ supports Bash and Zsh, and installs shell integration for applying the selected 
   a shell *function* name is just a command name to bash/zsh, and both legitimately accept
   hyphens/dots/colons between segments. Function names now follow a superset rule; variable names
   are unchanged.
+- Q: The fix above still rejected `k----load` (repeated hyphens) — should function-name validation
+  be more dynamic? → A: Yes — the first fix only allowed a *single* separator between identifier
+  segments, not the repeated/adjacent separators bash and zsh both genuinely accept. Loosened to
+  allow any arrangement of `[A-Za-z0-9_.:-]` after the required leading letter/underscore.
+- Q: Even the loosened allowlist above is still just a fixed pattern users will keep running into
+  (e.g. `with/slash`, `+`, `@`, non-ASCII letters — all genuinely valid bash/zsh function names,
+  confirmed empirically) — should this stop being an enumerated allowlist at all? → A: Yes.
+  Replaced with a denylist of actual shell metacharacters (whitespace/control bytes, statement
+  separators, redirection/pipes, quoting/expansion characters, braces/brackets, globbing
+  characters, `=`) plus the required leading letter/underscore; everything else is accepted
+  without the schema needing to know about it in advance. This still isn't "whatever `bash -n`/
+  `zsh -n` accepts": that check alone reports a name like `k;load` as syntactically fine too, but
+  only because it parses as two statements (`k`, then a function actually named `load`), not
+  because `k;load` is a valid single function name — which is exactly the injection risk the
+  denylist exists to close off (the name is spliced unescaped into `name() { body }` in the real,
+  non-`-n` activation script).
 - Q: `--install`, `--validate`, `--reload`, `--view`, `--rollback`, and `--uninstall` all failed
   with "project ... is not configured" even though every command is documented as accepting an
   equivalent `--flag` form. → A: Genuine bug — the dispatcher's switch-cases for those six commands
@@ -67,6 +83,36 @@ supports Bash and Zsh, and installs shell integration for applying the selected 
   semantic version to compare against — should it? → A: No — that left dev builds with no way to
   reach a release at all. An unparseable running version is now treated as definitely not current,
   so the latest stable release is always installed over it (see FR-037).
+- Q: `upgrade` and `install` were terse (one final line, no detail) and switching to a name that
+  isn't configured just said "is not configured" with no next step — should the CLI show more and
+  suggest a fix? → A: Yes. `upgrade` reports the current version, the release source, and the
+  latest version found, then asks before changing anything (`--yes`/`-y` skips the prompt);
+  `install`/`rollback`/`uninstall` show what they're about to touch (shell, profile, executable)
+  before their existing confirmation prompt. An unconfigured `<project>` now lists the configured
+  projects and points at `list`/`ls`, instead of a bare error.
+- Q: Users were hand-writing their own tab-completion for project names (found nested inside their
+  `env-switcher()` wrapper — working only from the second invocation onward, since a function
+  defined only inside another function doesn't exist to `compdef`/`complete` until that outer
+  function has run once) — should env-switcher provide this itself? → A: Yes, as part of the
+  managed block the installer already writes, not a new Go subcommand: a top-level completion
+  function (defined once, available from the very first invocation) reads project names fresh via
+  `yq` on `settings.yaml`, falling back to the installed executable's own `list` output if `yq`
+  isn't available — but only once `settings.yaml` already exists, so a bare TAB press can never
+  have the side effect of creating one. Missing `yq`, missing executable, missing/empty/invalid
+  config: no candidates, no error, every combination.
+- Q: The same user's real Zsh session showed the fix above break after exactly one successful
+  switch — completion fell back to plain filename completion. → A: Root-caused: their own
+  `shared.shell-cmd` calls `compinit` again (to reload another tool's completions after every
+  switch), and Zsh's `compinit` clears its *entire* completion registry on every call, not just
+  entries registered since the last one — silently dropping this binding along with everything
+  else. Since that shell-cmd is the user's own configuration, not something env-switcher can
+  change, the fix is on env-switcher's side instead: `env-switcher()` re-asserts its own
+  completion registration at the end of every invocation, self-healing regardless of what wiped it.
+- Q: A fresh install was appending the managed block strictly at the end of the profile — should
+  it be positioned differently? → A: Yes: inserted 5 lines before the end of the profile instead
+  (at the very start if the profile has 5 or fewer lines), so a user's own trailing lines — a
+  final tool's `eval "$(... init)"`, a prompt theme finalization — keep running after this block,
+  not before it. Reconciling an existing block still never moves it.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -450,10 +496,55 @@ failed download each leave the previously installed executable untouched.
   MUST be accepted by validation (so configuration written before this variable existed keeps
   loading) but MUST always be overwritten by the computed value when an environment is resolved —
   a declared value MUST NOT be used and MUST NOT cause a validation error.
-- **FR-047**: A shell function name MUST be validated against a rule that accepts the
-  hyphen/dot/colon-separated forms bash and zsh both treat as valid command names (e.g.
-  `k-load`), not the stricter POSIX-identifier rule required of a variable name (which must remain
-  a valid `export` target); the reserved-prefix rule (FR-027) applies to both.
+- **FR-047**: A shell function name MUST be validated dynamically against what bash/zsh actually
+  treat as a valid command name, not a fixed pattern of allowed forms — not the stricter
+  POSIX-identifier rule required of a variable name (which must remain a valid `export` target).
+  Concretely: a required leading letter (any script) or underscore, then any character except
+  whitespace/control bytes and the shell metacharacters that would change what the name parses as
+  once spliced unescaped into `name() { body }` in the real activation script (statement
+  separators, redirection, pipes, quoting/expansion characters, braces, brackets, globbing
+  characters, `=`). This MUST remain a denylist of what's unsafe, not an allowlist of enumerated
+  safe forms that will always lag behind real shell grammar, and MUST NOT delegate entirely to the
+  target shell's own parser: a syntax-only check (`bash -n`/`zsh -n`) alone cannot distinguish a
+  single function name containing a shell metacharacter (e.g. `k;load`) from multiple statements
+  that happen to parse. The reserved-prefix rule (FR-027) applies to both variable and function
+  names.
+- **FR-048**: The `upgrade` CLI command MUST report the running version, the release source, and
+  the latest stable version found before taking any action, and MUST ask for confirmation before
+  downloading or installing anything unless an explicit skip-confirmation flag is given; declining
+  MUST leave the installed executable unchanged and MUST NOT be reported as a failure.
+- **FR-049**: A `<project>` argument that does not match a configured environment MUST fail with a
+  message that lists the currently configured project names (or states plainly that none are
+  configured) and names the command that shows them again, rather than a bare "not configured".
+- **FR-050**: The installed shell integration MUST provide project-name tab-completion for both
+  supported shells, implemented entirely in the managed shell block — never a Go subcommand that
+  generates completion candidates. Completion MUST read project names fresh on every attempt (via
+  `yq` against `settings.yaml`, or — only once `settings.yaml` already exists — the installed
+  executable's own `list` output as a fallback when `yq` is unavailable), never from anything
+  cached in the binary at install time.
+- **FR-051**: Completion MUST degrade to zero candidates and no terminal error under every
+  unavailable-dependency condition: `yq` not installed, the env-switcher executable not installed,
+  `settings.yaml` missing, its `envs` map empty, or its contents invalid YAML — in any combination
+  — and MUST NOT have the side effect of creating `settings.yaml` or any other file. A project name
+  beginning with `-` MUST be offered as a candidate, not misinterpreted as an option.
+- **FR-052**: Completion MUST NOT execute the `env-switcher()` wrapper function, source
+  `current-env`, activate a project, or run any configured `shell-cmd`/`shell-function` — invoking
+  `list` for its fallback (FR-050) MUST go directly to the installed executable, never through the
+  wrapper.
+- **FR-053**: The completion function MUST be defined at the top level of the installed shell
+  block, never nested inside the `env-switcher()` wrapper function — a function defined only
+  inside another function does not exist to the shell's completion system until that outer
+  function has run at least once, which would otherwise mean completion only starts working after
+  the first invocation in a session. The wrapper function MUST re-assert the completion
+  registration at the end of every invocation (not only once at shell startup), so that anything a
+  user's own configuration does that might clear it (e.g. a Zsh `shell-cmd` calling `compinit`
+  again, which clears Zsh's entire completion registry, not just entries added since) is
+  self-healed on the very next invocation.
+- **FR-054**: A fresh installation (no existing managed-block markers) MUST insert the block a
+  fixed number of lines before the end of the profile, rather than unconditionally appending at
+  the very end, preserving whatever the profile's own trailing lines are; a profile shorter than
+  that MUST have the block inserted at its very beginning instead. Reconciling an already-present
+  block MUST continue to update it in place, never relocating it.
 
 ### Key Entities
 
@@ -465,6 +556,9 @@ failed download each leave the previously installed executable untouched.
   clean absolute path and automatically populated on every switch — referenceable from other
   `env-vars` values and visible as an ordinary exported shell variable to shell functions and
   shell-cmd; never user-settable, regardless of whether it's declared.
+- **Tab Completion**: The shell-side (not Go-side) function, installed as part of the managed
+  block, that offers configured project names for `env-switcher <TAB>` — sourced fresh from
+  `settings.yaml` via `yq`, falling back to the installed executable's own `list` output.
 - **Shared Definition**: A function or setting available to every project unless a project-specific
   definition with the same identifier overrides it.
 - **Managed Variable**: An environment variable whose lifecycle is controlled by env-switcher,
@@ -521,6 +615,12 @@ failed download each leave the previously installed executable untouched.
   already-current installation changes nothing; and a missing/mismatched checksum, unsupported
   platform, or failed download each leave the previously installed executable byte-for-byte
   unchanged.
+- **SC-011**: In a real Bash and a real Zsh session (a PTY, not just calling the completion
+  function directly), `env-switcher <TAB>` offers every configured project name on the very first
+  command of the session — no prior invocation required — and continues to after a real switch
+  whose `shell-cmd` calls `compinit` again. Separately, an automated test confirms every
+  unavailable-dependency combination (FR-051) yields zero candidates, no terminal error, and no
+  file created.
 
 ## Assumptions
 

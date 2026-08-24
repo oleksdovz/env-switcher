@@ -10,5 +10,52 @@ env-switcher() {
   __ENV_SWITCHER_TARGET_SHELL=zsh "$HOME/.env-switcher/bin/env-switcher" "$@"
   __env_switcher_status=$?
   [ -f "$__env_switcher_payload" ] && source "$__env_switcher_payload"
+  # Re-assert tab-completion every invocation, not just at shell startup: a configured shell-cmd
+  # that calls `compinit` again (a common way to (re)load some other tool's completions on
+  # switch) wipes zsh's *entire* completion registry, not just entries added since the last
+  # compinit — silently losing this binding along with everything else, so completion would stop
+  # working after exactly one successful switch. Re-registering here, every time, is cheap
+  # (no process spawned) and self-heals regardless of what caused the loss.
+  _env_switcher_register_completion
   return $__env_switcher_status
 }
+
+# Tab-completion for project names. Top-level on purpose, not nested inside env-switcher() — a
+# function defined only inside another function doesn't exist for compdef to find until that
+# outer function has actually run once, which is why completion would only start working after
+# the first invocation.
+#
+# Prefers reading settings.yaml directly via yq (no process to start beyond it). If yq isn't
+# installed, or it produced nothing usable, falls back to `env-switcher list` — the installed
+# executable itself, invoked directly (never through the env-switcher() wrapper above, so this
+# never sources current-env, activates a project, or runs any configured shell-cmd/shell-function;
+# `list` is already a plain, read-only, non-switching command on its own). Either way this is a
+# fresh read every time completion is requested, never anything cached from the binary.
+#
+# The fallback only runs once settings.yaml already exists: `env-switcher list` auto-creates a
+# starter settings.yaml the first time anything runs against a machine with none yet (the same
+# convenience the plain CLI relies on), and a mere TAB press must never have that or any other
+# file-creation side effect.
+_env_switcher_completion() {
+  local -a envs
+  local raw
+
+  if command -v yq >/dev/null 2>&1 && [[ -r "$HOME/.env-switcher/settings.yaml" ]]; then
+    raw=$(yq -r '.envs | keys | .[]' "$HOME/.env-switcher/settings.yaml" 2>/dev/null)
+  fi
+
+  if [[ -z "$raw" && -r "$HOME/.env-switcher/settings.yaml" && -x "$HOME/.env-switcher/bin/env-switcher" ]]; then
+    raw=$("$HOME/.env-switcher/bin/env-switcher" list 2>/dev/null | cut -f1)
+  fi
+
+  [[ -n "$raw" ]] || return 0
+
+  envs=("${(@f)raw}")
+  compadd -- "${envs[@]}"
+}
+
+_env_switcher_register_completion() {
+  command -v compdef >/dev/null 2>&1 && compdef _env_switcher_completion env-switcher
+}
+
+_env_switcher_register_completion

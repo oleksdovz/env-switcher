@@ -36,6 +36,10 @@ func migrateLegacyExecutable(stdout, stderr io.Writer) {
 	}
 }
 
+// actionVerb reads naturally as the lead line of each command's detail block ("install will:",
+// "rollback will:", "uninstall will:").
+var actionVerb = map[string]string{"install": "install", "rollback": "restore", "uninstall": "remove"}
+
 func installCommand(action string, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	shellName, profile, yes, err := installArgs(args)
 	if err != nil {
@@ -45,13 +49,21 @@ func installCommand(action string, args []string, stdin io.Reader, stdout, stder
 	if err != nil {
 		return err
 	}
+
+	_, _ = fmt.Fprintf(stderr, "→ %s will:\n", actionVerb[action])
+	_, _ = fmt.Fprintf(stderr, "  shell             %s\n", target.Shell)
+	_, _ = fmt.Fprintf(stderr, "  profile           %s\n", target.Profile)
+	if action == "install" {
+		_, _ = fmt.Fprintf(stderr, "  executable        %s\n", target.Executable)
+	}
 	if !yes {
-		_, _ = fmt.Fprintf(stderr, "%s shell integration in %s? [y/N]\n", action, target.Profile)
+		_, _ = fmt.Fprintf(stderr, "\n%s shell integration in %s? [y/N] ", action, target.Profile)
 		line, _ := bufio.NewReader(stdin).ReadString('\n')
 		if strings.ToLower(strings.TrimSpace(line)) != "y" {
 			return &Error{Outcome: OutcomeCancelled, Op: action, Message: "cancelled"}
 		}
 	}
+	_, _ = fmt.Fprintln(stderr)
 	switch action {
 	case "install":
 		exe, err := os.Executable()
@@ -63,25 +75,25 @@ func installCommand(action string, args []string, stdin io.Reader, stdout, stder
 			return err
 		}
 		if result.Changed {
-			_, _ = fmt.Fprintf(stdout, "installed integration in %s", result.Profile)
+			_, _ = fmt.Fprintf(stdout, "✓ installed integration in %s", result.Profile)
 			if result.Backup != "" {
 				_, _ = fmt.Fprintf(stdout, " (backup %s)", result.Backup)
 			}
 			_, _ = fmt.Fprintln(stdout)
 		} else {
-			_, _ = fmt.Fprintln(stdout, "integration is already up to date")
+			_, _ = fmt.Fprintln(stdout, "✓ integration is already up to date")
 		}
 		migrateLegacyExecutable(stdout, stderr)
 	case "rollback":
 		if err := installer.Rollback(target); err != nil {
 			return err
 		}
-		_, _ = fmt.Fprintln(stdout, "profile restored from verified backup")
+		_, _ = fmt.Fprintln(stdout, "✓ profile restored from verified backup")
 	case "uninstall":
 		if err := installer.Uninstall(target); err != nil {
 			return err
 		}
-		_, _ = fmt.Fprintln(stdout, "managed integration removed")
+		_, _ = fmt.Fprintln(stdout, "✓ managed integration removed")
 	}
 	return nil
 }

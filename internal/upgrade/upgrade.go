@@ -19,6 +19,10 @@ const (
 	Repo  = "env-switcher"
 )
 
+// SourceURL is the human-readable location Check/Upgrade query, for callers that want to display
+// it (e.g. "source: https://github.com/oleksdovz/env-switcher").
+const SourceURL = "https://github.com/" + Owner + "/" + Repo
+
 // executableAssetName is the file this project's release workflow places inside every platform
 // zip (see .github/workflows/release.yml: `zip ... env-switcher`).
 const executableAssetName = "env-switcher"
@@ -34,6 +38,27 @@ type Result struct {
 	AlreadyCurrent bool
 }
 
+// CheckResult is the outcome of comparing the running version against the latest stable release —
+// before any download happens, so a caller can show the user what was found and let them decide
+// whether to Apply it.
+type CheckResult struct {
+	// CurrentLabel is the running version as it should be reported: the parsed/canonical form
+	// when currentVersion (passed to Check) was a real release version, otherwise the raw string
+	// as given (e.g. "dev" for a local build) — never blank.
+	CurrentLabel string
+	// CurrentIsRelease is false when the running version doesn't parse as a semantic version at
+	// all (a local/dev build) — see Upgrade's doc comment for what that means for comparison.
+	CurrentIsRelease bool
+	// Release is the latest stable release found, kept so a subsequent Apply call doesn't need
+	// to query the release source again.
+	Release Release
+	// NewVersion is Release's version, canonically formatted.
+	NewVersion string
+	// UpgradeAvailable is true when Release is newer than the running version (or the running
+	// version isn't a release at all, so it's treated as definitely not current).
+	UpgradeAvailable bool
+}
+
 // Upgrader finds and installs the latest compatible stable release. Its dependencies are all
 // interfaces or plain function values so tests can substitute fixtures instead of live GitHub —
 // see NewUpgrader for the real wiring and upgrade_test.go for the fakes.
@@ -44,6 +69,11 @@ type Upgrader struct {
 	Platform  Platform
 	// InstalledPath returns the canonical install destination, e.g. via config.ExecutablePath.
 	InstalledPath func() (string, error)
+	// Progress, if set, is called with a short human-readable stage description as Apply moves
+	// through downloading, verifying, and installing — for a caller (the CLI) that wants to print
+	// step-by-step output. Check does not call it: querying release metadata is a single network
+	// round trip with nothing worth narrating in stages. Never called concurrently.
+	Progress func(stage string)
 }
 
 // NewUpgrader builds an Upgrader wired to the real oleksdovz/env-switcher GitHub repository.
@@ -58,33 +88,51 @@ func NewUpgrader(installedPath func() (string, error)) *Upgrader {
 	}
 }
 
-// Upgrade checks the latest stable release against currentVersion and, if it's newer, downloads,
-// verifies, and atomically installs it. currentVersion is the running binary's own build-time
-// version string (see internal/app.BuildInfo.Version) — a local/dev build (unset by the release
-// workflow's ldflags, e.g. the literal "dev") doesn't parse as a semantic version, and rather than
-// refuse to compare, that's treated as "not a release, so not current": the latest stable release
-// is always installed over it. The existing installed binary is left exactly as it was if any
-// step — network, checksum, extraction, or install — fails.
-func (u *Upgrader) Upgrade(ctx context.Context, currentVersion string) (Result, error) {
+func (u *Upgrader) progress(stage string) {
+	if u.Progress != nil {
+		u.Progress(stage)
+	}
+}
+
+// Check queries the latest stable release and compares it against currentVersion — the running
+// binary's own build-time version string (see internal/app.BuildInfo.Version) — without
+// downloading anything. currentVersion not parsing as a semantic version (a local/dev build,
+// e.g. the literal "dev") is treated as "definitely not current" rather than an error: there is
+// no meaningful release version to compare against, so an upgrade is always considered available.
+func (u *Upgrader) Check(ctx context.Context, currentVersion string) (CheckResult, error) {
 	current, parseErr := ParseVersion(currentVersion)
-	// oldVersionLabel is what Result reports as "old": the parsed/canonical form when
-	// currentVersion is a real release version, otherwise the raw string as given (e.g. "dev") —
-	// never a blank zero-value Version.
-	oldVersionLabel := currentVersion
+	label := currentVersion
 	if parseErr == nil {
-		oldVersionLabel = current.String()
+		label = current.String()
 	}
 
 	release, err := u.Source.LatestStable(ctx)
 	if err != nil {
-		return Result{}, fmt.Errorf("check for updates: %w", err)
+		return CheckResult{}, fmt.Errorf("check for updates: %w", err)
 	}
 	latest, err := release.Version()
 	if err != nil {
-		return Result{}, fmt.Errorf("latest release %q has an unparseable version: %w", release.TagName, err)
+		return CheckResult{}, fmt.Errorf("latest release %q has an unparseable version: %w", release.TagName, err)
 	}
-	if parseErr == nil && !latest.NewerThan(current) {
-		return Result{OldVersion: oldVersionLabel, NewVersion: latest.String(), AlreadyCurrent: true}, nil
+
+	available := parseErr != nil || latest.NewerThan(current)
+	return CheckResult{
+		CurrentLabel:     label,
+		CurrentIsRelease: parseErr == nil,
+		Release:          release,
+		NewVersion:       latest.String(),
+		UpgradeAvailable: available,
+	}, nil
+}
+
+// Apply downloads, verifies, and atomically installs release's asset for the running platform.
+// currentLabel is only carried through into the returned Result.OldVersion for reporting; it does
+// not affect what gets installed. The existing installed binary is left exactly as it was if any
+// step — network, checksum, extraction, or install — fails.
+func (u *Upgrader) Apply(ctx context.Context, release Release, currentLabel string) (Result, error) {
+	latest, err := release.Version()
+	if err != nil {
+		return Result{}, fmt.Errorf("release %q has an unparseable version: %w", release.TagName, err)
 	}
 
 	destPath, err := u.InstalledPath()
@@ -101,6 +149,7 @@ func (u *Upgrader) Upgrade(ctx context.Context, currentVersion string) (Result, 
 		return Result{}, err
 	}
 
+	u.progress(fmt.Sprintf("downloading %s", asset.Name))
 	sums, err := u.Checksums.Fetch(ctx, release)
 	if err != nil {
 		return Result{}, err
@@ -123,6 +172,8 @@ func (u *Upgrader) Upgrade(ctx context.Context, currentVersion string) (Result, 
 	if _, err := downloadToFile(ctx, u.Client, asset.DownloadURL, downloadPath, limit); err != nil {
 		return Result{}, fmt.Errorf("download %s: %w", asset.Name, err)
 	}
+
+	u.progress("verifying checksum")
 	if err := VerifyFile(downloadPath, wantSum); err != nil {
 		return Result{}, fmt.Errorf("%s failed checksum verification: %w", asset.Name, err)
 	}
@@ -134,6 +185,7 @@ func (u *Upgrader) Upgrade(ctx context.Context, currentVersion string) (Result, 
 	defer os.Remove(finalPath)
 
 	if strings.HasSuffix(asset.Name, ".zip") {
+		u.progress("extracting " + executableAssetName)
 		if err := ExtractExecutable(downloadPath, finalPath, executableAssetName); err != nil {
 			return Result{}, fmt.Errorf("extract %s: %w", asset.Name, err)
 		}
@@ -144,11 +196,27 @@ func (u *Upgrader) Upgrade(ctx context.Context, currentVersion string) (Result, 
 		}
 	}
 
+	u.progress("installing " + destPath)
 	if err := fsatomic.Publish(finalPath, destPath, 0o700); err != nil {
 		return Result{}, fmt.Errorf("install %s: %w", destPath, err)
 	}
 
-	return Result{OldVersion: oldVersionLabel, NewVersion: latest.String(), InstalledPath: destPath}, nil
+	return Result{OldVersion: currentLabel, NewVersion: latest.String(), InstalledPath: destPath}, nil
+}
+
+// Upgrade is Check then, if an upgrade is available, Apply — the single-call convenience API for
+// a caller (the TUI's F6, which has its own confirmation dialog) that doesn't need to inspect or
+// act on the check result before deciding whether to proceed. The CLI's "upgrade"/"--upgrade"
+// command uses Check and Apply directly instead, so it can show what was found and ask first.
+func (u *Upgrader) Upgrade(ctx context.Context, currentVersion string) (Result, error) {
+	check, err := u.Check(ctx, currentVersion)
+	if err != nil {
+		return Result{}, err
+	}
+	if !check.UpgradeAvailable {
+		return Result{OldVersion: check.CurrentLabel, NewVersion: check.NewVersion, AlreadyCurrent: true}, nil
+	}
+	return u.Apply(ctx, check.Release, check.CurrentLabel)
 }
 
 // reserveTempPath returns a unique path in dir (created empty, so later writers can just
