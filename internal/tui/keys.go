@@ -16,6 +16,8 @@ func action(key string) string {
 		return "reload"
 	case "f5", "i":
 		return "install"
+	case "f6":
+		return "upgrade"
 	case "f10", "q", "esc":
 		return "quit"
 	case "y", "n":

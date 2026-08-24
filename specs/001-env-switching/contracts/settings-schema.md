@@ -68,8 +68,12 @@ include both the merged `k_load` and its own `k_ns`; its `shell-cmd` runs after 
 
 - Root keys: `version`, optional `shared`, and `envs` only.
 - Shared/project keys: `env-vars`, `shell-functions`, `shell-cmd`, and project-level `project` only.
-- `project` is required, non-empty, informational metadata (shown by `list`/`get`) — switching
-  never `cd`s to it or checks that it exists.
+- `project` is required, non-empty, informational metadata (shown by `list`/`get` exactly as
+  configured, unexpanded) — switching never `cd`s to it or checks that it exists. It does,
+  however, drive the reserved `_PROJECT` variable (below): resolving it expands a leading `~`/`~/`
+  or a `$HOME`/`${HOME}` reference (the application's one controlled, no-shell path-expansion
+  mechanism), then requires the result to be a clean absolute path — an empty, relative, or
+  otherwise unresolved `project` fails the switch.
 - Variables/functions use maps; names are case-sensitive.
 - Reject unknown or duplicate keys, multiple documents, custom tags, and type mismatches.
 - Anchors (`&name`), aliases (`*name`), and merge keys (`<<: *name`) are accepted — explicit keys in
@@ -77,12 +81,25 @@ include both the merged `k_load` and its own `k_ns`; its `shell-cmd` runs after 
   an anchored value cannot itself reference another anchor (one hop only, never chained), and the
   document's total size after every alias is resolved must not exceed 8 MiB (independent of the
   1 MiB raw-file cap).
-- Names match `[A-Za-z_][A-Za-z0-9_]*` and cannot use `__ENV_SWITCHER_`.
+- Variable names match `[A-Za-z_][A-Za-z0-9_]*` (a POSIX identifier — required for `export`) and
+  cannot use `__ENV_SWITCHER_`. Function names are a superset: the same identifier core, optionally
+  followed by `.`/`:`/`-`-separated segments (e.g. `k-load`, `git.foo`) — bash and zsh both accept
+  these as command names, unlike variable names — and the same `__ENV_SWITCHER_` prefix is still
+  reserved. `shell.ValidateFunction`'s `bash -n`/`zsh -n` parse remains the actual authority on
+  whether a given name is syntactically acceptable to the target shell.
 - Project names additionally cannot be a reserved CLI command word (`help`, `list`, `ls`, `edit`,
   `get`, `version`, `validate`, `install`, `rollback`, `uninstall`, `reload`, `view`), since a
   project sharing one would be unreachable through `env-switcher <project>`.
 - A name cannot be both variable and function in one effective project.
-- Values are literal strings: no interpolation, command substitution, or implicit conversion.
+- Values are literal strings: no interpolation, command substitution, or implicit conversion —
+  except that any `env-vars` value (shared or project-specific) may reference `$_PROJECT` or
+  `${_PROJECT}`, substituted with the resolved `project` path described above. No other variable
+  is expanded this way.
+- `_PROJECT` is a reserved, application-managed `env-vars` name: env-switcher sets it automatically
+  on every switch (shared and project-specific `shell-functions`/`shell-cmd` see it as an ordinary
+  exported shell variable, not a substitution). A manually declared `_PROJECT` is accepted by
+  validation — for settings written before this variable existed — but is always overwritten by
+  the computed value at resolve time; it is never used and never an error.
 - A `shell-functions` entry and `shell-cmd` are each a single scalar body — there is no per-shell
   (`bash`/`zsh`) split. The same body is offered to, and syntax-checked against, whichever shell is
   active; a function that must genuinely differ per shell branches on something like

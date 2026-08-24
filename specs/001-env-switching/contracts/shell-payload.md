@@ -5,15 +5,22 @@
 - The CLI writes the activation script to a fixed file, `~/.env-switcher/current-env`
   (mode `0600`), instead of stdout. It never prints values or function bodies to stdout/stderr.
 - The write is atomic (same-directory temp file, `fsync`, rename) and happens **only after** a
-  fully successful project resolution. Any failure leaves an existing file byte-for-byte
-  unchanged.
-- The installed shell function invokes the CLI (inheriting the real stdout/stderr — there is no
-  command-substitution capture step) and then unconditionally does
+  fully successful project resolution, and **only** for a bare invocation, a project name, or
+  `--select` — no other command ever writes it. Any failure (or any other command) leaves an
+  existing file byte-for-byte unchanged.
+- The installed shell function first removes `current-env` (`rm -f`), then invokes the CLI
+  (inheriting the real stdout/stderr — there is no command-substitution capture step), then does
   `[ -f "$HOME/.env-switcher/current-env" ] && source "$HOME/.env-switcher/current-env"`.
 
-Because the file is rewritten only on success, sourcing a stale copy after a failed switch simply
-reapplies the last successful state — this is what "no change on failure" means without a
-wrapper-side validation step.
+Clearing the file first, and sourcing it only if the invocation just recreated it, is what
+distinguishes "this run actually switched" from "a run once switched, at some point in the past."
+Without that first step, current-env would persist across unrelated invocations, and *any*
+successful command — `--help` included — would re-source whatever a previous switch left behind:
+its variables re-exported, its shell-cmd hooks re-run, its functions redefined. A failed switch
+attempt behaves the same way as any other non-writing command: nothing is there to source, so the
+shell is left exactly as it was, not reactivated with the last successful state. This is what "no
+change on failure" means, without a wrapper-side validation step and without relying on the CLI's
+exit code (a non-switch command also exits 0, so exit code alone can't distinguish the two).
 
 ## Inputs
 
@@ -56,9 +63,12 @@ partial application within one switch is possible, by design, in exchange for a 
 
 - Invoke the fixed installed executable (`~/.env-switcher/bin/env-switcher`) through a shell
   function named `env-switcher`, forwarding all arguments and exporting the target shell.
+- Clear `current-env` before invoking the executable, so its presence afterward reflects only
+  this invocation.
 - Preserve and return the CLI's own exit status (captured before sourcing current-env, since
   `source` overwrites `$?`).
-- Source `current-env` unconditionally when present; do nothing when absent.
+- Source `current-env` only when present *after* the invocation; do nothing when absent — which
+  covers both "this command doesn't switch" and "this switch attempt failed."
 - Never print the file's content because it may contain secrets.
 
 Contract changes to the generated script require fixtures for both shells; the wrapper itself has

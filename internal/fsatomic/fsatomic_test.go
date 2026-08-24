@@ -39,6 +39,48 @@ func TestInterruptedWriteLeavesPriorFile(t *testing.T) {
 	}
 }
 
+func TestPublishReplacesContentAndMode(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "env-switcher")
+	if err := os.WriteFile(path, []byte("old"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	tmp := filepath.Join(dir, "env-switcher.tmp")
+	if err := os.WriteFile(tmp, []byte("new"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Publish(tmp, path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(b) != "new" || info.Mode().Perm() != 0o700 {
+		t.Fatalf("publish content/mode mismatch: %q %v", b, info.Mode().Perm())
+	}
+	if _, err := os.Stat(tmp); !os.IsNotExist(err) {
+		t.Fatalf("temp file was not consumed: stat err=%v", err)
+	}
+}
+
+func TestPublishRejectsDifferentDirectories(t *testing.T) {
+	dir := t.TempDir()
+	other := t.TempDir()
+	tmp := filepath.Join(other, "env-switcher.tmp")
+	if err := os.WriteFile(tmp, []byte("new"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "env-switcher")
+	if err := Publish(tmp, path, 0o700); err == nil {
+		t.Fatal("expected an error for a cross-directory publish")
+	}
+}
+
 func TestReadOnlyParentFailsWithoutChangingFile(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root bypasses directory permissions")

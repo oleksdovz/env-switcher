@@ -22,18 +22,22 @@
 # >>> env-switcher managed block v1 >>>
 #env-switcher
 env-switcher() {
-  local __env_switcher_status
+  local __env_switcher_status __env_switcher_payload="$HOME/.env-switcher/current-env"
+  rm -f "$__env_switcher_payload"
   __ENV_SWITCHER_TARGET_SHELL=<bash|zsh> "$HOME/.env-switcher/bin/env-switcher" "$@"
   __env_switcher_status=$?
-  [ -f "$HOME/.env-switcher/current-env" ] && source "$HOME/.env-switcher/current-env"
+  [ -f "$__env_switcher_payload" ] && source "$__env_switcher_payload"
   return $__env_switcher_status
 }
 # <<< env-switcher managed block v1 <<<
 ```
 
-The wrapper forwards every argument, so `install`/`get`/`list`/`edit`/`help`/`version`, `--flag`
-equivalents, and a bare project name all reach the executable the same way; only the exported
-target-shell value differs between the Bash and Zsh templates.
+The wrapper forwards every argument, so `install`/`get`/`list`/`edit`/`help`/`version`/`upgrade`,
+`--flag` equivalents, and a bare project name all reach the executable the same way; only the
+exported target-shell value differs between the Bash and Zsh templates. Clearing the payload file
+before invoking, and sourcing it afterward only if present, is what keeps every command besides an
+actual switch (bare invocation, project name, `--select`) from reactivating whatever an earlier,
+unrelated successful switch left there — see [shell-payload.md](shell-payload.md).
 
 Zero or one complete block is valid before reconciliation. Multiple, nested, reversed, or incomplete
 markers fail closed; the installer never guesses a deletion range. The block is reconciled to the
@@ -70,6 +74,12 @@ The default (no-argument) invocation compares its own resolved executable path a
 
 Repeated identical installation does not change profile bytes or duplicate blocks. A no-op need not
 create another backup.
+
+An executable left over at the pre-`bin/`-convention location (`~/.env-switcher/env-switcher`,
+before this executable target existed) is removed once the canonical `bin/env-switcher` copy from
+this transaction is confirmed in place — never before, and never if it's a symlink or not owned by
+the current user. This runs after `install`, after the silent already-installed self-update, and
+after a successful `upgrade`.
 
 ## Rollback and Uninstall
 

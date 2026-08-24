@@ -26,6 +26,38 @@ supports Bash and Zsh, and installs shell integration for applying the selected 
   user-provided executable code; warn on first run and after function changes, and execute them only
   after explicit environment selection.
 
+### Session 2026-08-24
+
+- Q: The installed shell function was found to reactivate the last-switched project (re-running
+  its `shell-cmd` hooks, redefining its functions) after *any* successful command, including
+  `--help`. What should the shell payload contract be? → A: The current-environment file is
+  written only by the three actions that actually switch a project (bare invocation, a project
+  name, `--select`); the installed shell function clears it before every invocation and sources it
+  afterward only if that invocation just rewrote it, so every other command — including a failed
+  switch attempt — leaves the running shell exactly as it was, never re-applying a stale prior
+  switch.
+- Q: How should env-switcher upgrade itself? → A: A documented `upgrade`/`--upgrade` command (and
+  `F6` in the terminal interface, driving the identical service) checks the latest **stable**
+  (non-draft, non-prerelease) release of `oleksdovz/env-switcher` by semantic-version comparison,
+  downloads the asset matching the running platform, verifies it against the release's published
+  checksums, and atomically replaces the installed executable — never installing an unverified or
+  partially-downloaded binary, and never touching the existing installation if any step fails.
+- Q: Users were manually declaring a `PROJECT_DIR`/`_PROJECT`-style `env-vars` entry to get their
+  project's directory into a variable, then wanted to reference it from other variables — should
+  env-switcher provide this automatically? → A: Yes. `_PROJECT` becomes a reserved, automatically
+  populated variable: `project` is resolved (expanding a leading `~`/`~/` or `$HOME`/`${HOME}` —
+  the application's one controlled, no-shell expansion mechanism — into a clean absolute path,
+  failing the switch if that's not possible) and exposed as `_PROJECT` on every switch. Other
+  `env-vars` values may reference it via `$_PROJECT`/`${_PROJECT}` substitution (and nothing else
+  is expanded that way); shared/project shell functions and shell-cmd see it as an ordinary
+  exported shell variable. A manually declared `_PROJECT` is accepted (not an error, for
+  settings written before this existed) but always overwritten by the computed value.
+- Q: Should a shell function name like `k-load` (rejected as an "invalid identifier") be allowed?
+  → A: Yes — that was a genuine bug. A shell *variable* name must be a plain POSIX identifier, but
+  a shell *function* name is just a command name to bash/zsh, and both legitimately accept
+  hyphens/dots/colons between segments. Function names now follow a superset rule; variable names
+  are unchanged.
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Switch Project Environment (Priority: P1)
@@ -65,6 +97,13 @@ values while unrelated shell values remain unchanged.
 7. **Given** the CLI fails to prepare a selected environment, **When** control returns to the shell
    function, **Then** the current-environment file is left unchanged, so sourcing it again reapplies
    the prior state and the current environment does not change.
+8. **Given** a project was successfully switched to earlier in the current shell session, **When**
+   the user runs any command that does not itself switch a project (e.g. `--help`, `list`, `get`,
+   `version`, `validate`, `reload`, `view`, `edit`, `install`, `upgrade`, `rollback`, `uninstall`,
+   or a switch attempt that fails), **Then** that command's own output is printed once, exactly as
+   it would be standalone, and the shell function does not re-source the current-environment file,
+   re-run any `shell-cmd` hook, redefine any shell function, change directory, or modify any
+   environment variable.
 
 ---
 
@@ -168,6 +207,54 @@ an operation, and exit while verifying that no unconfirmed environment change oc
 4. **Given** an operation succeeds or fails, **When** it completes, **Then** the user receives a clear
    status that does not disclose secret values.
 
+### User Story 5 - Upgrade env-switcher (Priority: P3)
+
+As a developer, I can upgrade my installed env-switcher to the latest compatible release from the
+terminal interface or the CLI, verified and installed without leaving my installation in a broken
+or unverified state.
+
+**Why this priority**: Keeping the tool current matters once it's installed and depended on daily,
+but it is independent of — and can be tested independently from — the core switching and
+configuration flows.
+
+**Independent Test**: Point the upgrade check at a fixture release server (never live GitHub) with
+a newer stable version, run the upgrade, and verify the installed executable, reported old/new
+version, and installed path; separately, verify an already-current installation reports that
+clearly and changes nothing, and that a corrupted/missing checksum, unsupported platform, or
+failed download each leave the previously installed executable untouched.
+
+**Acceptance Scenarios**:
+
+1. **Given** the running version is older than the latest stable release, **When** the user invokes
+   `F6` (or the documented `env-switcher upgrade`/`--upgrade` command) and confirms in the terminal
+   interface, **Then** the matching platform asset is downloaded, verified against the release's
+   published checksums, and atomically installed at the canonical executable path, and the old
+   version, new version, and installed path are reported.
+2. **Given** the running version is already the latest stable release, **When** an upgrade is
+   requested, **Then** no download or installation occurs and the user is told clearly that
+   env-switcher is already up to date.
+3. **Given** a release is a draft or a prerelease, **When** the latest stable release is determined,
+   **Then** that release is excluded from consideration regardless of its version number.
+4. **Given** the release the upgrade would install does not publish a checksum file, **When** the
+   upgrade runs, **Then** it fails with an actionable error instead of installing an unverified
+   binary, and the previously installed executable is left unchanged.
+5. **Given** a downloaded asset's checksum does not match the release's published checksum, **When**
+   verification runs, **Then** the upgrade fails and the previously installed executable is left
+   unchanged.
+6. **Given** the release publishes no asset for the running operating system and architecture,
+   **When** the upgrade runs, **Then** it fails with an actionable error naming the platform sought
+   and the platforms that are actually available, and the previously installed executable is left
+   unchanged.
+7. **Given** the F6 terminal action and the `upgrade`/`--upgrade` CLI command, **When** either is
+   invoked, **Then** both drive the identical upgrade logic; neither reimplements platform
+   detection, release retrieval, version comparison, checksum verification, or installation on its
+   own.
+8. **Given** a project's configured name would collide with the `upgrade` command word, **When**
+   settings are validated, **Then** that name is rejected for the same reason other reserved
+   command words are.
+
+---
+
 ### Edge Cases
 
 - The settings directory or file does not exist on first run.
@@ -189,6 +276,18 @@ an operation, and exit while verifying that no unconfirmed environment change oc
 - The default invocation runs from a path other than the installed executable location, on a
   machine with no prior installation, with an unsupported or undetected shell, or with a
   first-run confirmation declined.
+- A non-switch command runs in a shell session where a project was previously activated, or where
+  the current-environment file otherwise still exists from an earlier session.
+- A switch attempt (bare invocation, project name, or `--select`) fails validation or resolution.
+- The upgrade check has no network access, the release host returns a rate-limit or server error,
+  or the request times out.
+- The latest release is a draft or a prerelease, or its tag does not parse as a semantic version.
+- The latest release publishes no checksum file, an asset the checksum file doesn't list, or a
+  checksum that doesn't match the downloaded asset.
+- The latest release publishes no asset for the running operating system and architecture.
+- A downloaded release archive contains an absolute path, a `..` traversal entry, a symbolic link,
+  or any entry other than the single expected executable.
+- An earlier installation left an executable at the pre-`bin/` install location.
 
 ## Requirements *(mandatory)*
 
@@ -291,6 +390,57 @@ an operation, and exit while verifying that no unconfirmed environment change oc
   bounded expansion: an anchored value MUST NOT itself reference another anchor, and the document's
   total size after resolving every alias MUST NOT exceed a fixed cap independent of the raw-file
   size cap.
+- **FR-035**: Only a bare invocation, a documented project name, or `--select` MUST ever write the
+  current-environment file; every other documented command (including a switch attempt that fails)
+  MUST leave it untouched. The installed shell function MUST clear the current-environment file
+  before invoking the CLI and source it afterward only if that invocation just rewrote it, so a
+  non-switch command or a failed switch never re-applies a stale prior switch's variables,
+  functions, or `shell-cmd` side effects. Distinguishing an actual switch from routine output MUST
+  NOT rely on the CLI's exit code alone.
+- **FR-036**: Users MUST be able to upgrade the installed executable with `F6` (terminal interface)
+  or the documented `upgrade`/`--upgrade` CLI command; both MUST drive one shared upgrade
+  implementation rather than each implementing platform detection, release retrieval, version
+  comparison, checksum verification, or installation independently.
+- **FR-037**: The upgrade check MUST determine the latest release using semantic-version
+  comparison of non-draft, non-prerelease releases only — never simply the most recently published
+  release — and MUST report clearly, without downloading or installing anything, when the running
+  version is already current.
+- **FR-038**: The upgrade action MUST select the release asset matching the running operating
+  system and architecture, and MUST fail with an actionable error naming both the sought platform
+  and the platforms the release actually publishes when no match exists.
+- **FR-039**: The upgrade action MUST verify a downloaded asset against the release's published
+  checksums before installing it. A release that publishes no checksum file, or a checksum that
+  does not match, MUST be treated as a hard failure — never a silently skipped check and never an
+  installed-but-unverified binary.
+- **FR-040**: When the downloaded asset is an archive, the upgrade action MUST extract only the
+  single expected executable entry, rejecting an absolute path, a `..` traversal component, a
+  symbolic link, or any other archive entry.
+- **FR-041**: The upgrade action MUST install the new executable atomically at the canonical
+  install path and MUST leave the previously installed executable unchanged if any step (network
+  access, checksum verification, extraction, or installation) fails. On success it MUST report the
+  old version, new version, and installed path.
+- **FR-042**: `upgrade` MUST be a reserved CLI command word, rejected as a configured project name
+  at validation time for the same reason other reserved command words are (FR-030).
+- **FR-043**: An executable left over at a pre-`bin/`-convention install location MUST be safely
+  migrated (removed only once the canonical `bin/` executable is confirmed in place) rather than
+  left as an orphaned, unreferenced copy or a target the shell integration could be pointed at.
+- **FR-044**: Every successful switch MUST populate a reserved `_PROJECT` variable with the
+  environment's `project` path resolved to a clean absolute path, using only the application's
+  controlled `~`/`~/`/`$HOME`/`${HOME}` expansion — never a shell or `eval`. An empty, relative, or
+  otherwise unresolved `project` MUST fail the switch.
+- **FR-045**: Any `env-vars` value (shared or project-specific) MUST be able to reference the
+  resolved project path via `$_PROJECT` or `${_PROJECT}` substitution; no other variable reference
+  is expanded in `env-vars` values. Shared and project-specific `shell-functions` and `shell-cmd`
+  MUST see `_PROJECT` as an ordinary exported shell variable, without any text substitution into
+  their bodies.
+- **FR-046**: A manually declared `_PROJECT` under `env-vars`, in either shared or project scope,
+  MUST be accepted by validation (so configuration written before this variable existed keeps
+  loading) but MUST always be overwritten by the computed value when an environment is resolved —
+  a declared value MUST NOT be used and MUST NOT cause a validation error.
+- **FR-047**: A shell function name MUST be validated against a rule that accepts the
+  hyphen/dot/colon-separated forms bash and zsh both treat as valid command names (e.g.
+  `k-load`), not the stricter POSIX-identifier rule required of a variable name (which must remain
+  a valid `export` target); the reserved-prefix rule (FR-027) applies to both.
 
 ### Key Entities
 
@@ -298,6 +448,10 @@ an operation, and exit while verifying that no unconfirmed environment change oc
   ordered collection of uniquely named projects.
 - **Project Environment**: A named switch target containing an informational project directory
   (not a `cd` target), managed environment variables, and project-specific shell functions.
+- **Reserved Project Variable (`_PROJECT`)**: The environment's `project` path, resolved to a
+  clean absolute path and automatically populated on every switch — referenceable from other
+  `env-vars` values and visible as an ordinary exported shell variable to shell functions and
+  shell-cmd; never user-settable, regardless of whether it's declared.
 - **Shared Definition**: A function or setting available to every project unless a project-specific
   definition with the same identifier overrides it.
 - **Managed Variable**: An environment variable whose lifecycle is controlled by env-switcher,
@@ -314,6 +468,12 @@ an operation, and exit while verifying that no unconfirmed environment change oc
   invokes the CLI and then sources the resulting well-defined, shell-specific activation file.
 - **Installation Backup**: A recoverable representation of the shell profile before env-switcher
   modifies it.
+- **Release**: A published version of env-switcher identified by a semantic-version tag, marked
+  draft/prerelease or not, and offering one downloadable asset per supported operating
+  system/architecture plus a checksum file covering them.
+- **Upgrade Check**: The shared operation (invoked identically by `F6` and the `upgrade`/`--upgrade`
+  command) that compares the running version against the latest non-draft, non-prerelease release
+  and, if newer, downloads, verifies, and atomically installs its matching platform asset.
 
 ## Success Criteria *(mandatory)*
 
@@ -338,6 +498,16 @@ an operation, and exit while verifying that no unconfirmed environment change oc
 - **SC-008**: In 100% of secret-canary tests, secret values appear in none of logs, errors,
   diagnostics, crash reports, or user-visible shell-integration output. Intentional local disclosure
   after confirmed F2 warning and user-directed editing through F3 are explicitly excluded.
+- **SC-009**: In an automated acceptance test that switches a project and then runs a non-switch
+  command (e.g. `--help`) in the same shell session, the current-environment file is not
+  re-sourced: no `shell-cmd` hook runs a second time, no shell function is redefined a second
+  time, no environment variable changes, and the non-switch command's own output appears exactly
+  once.
+- **SC-010**: Against a fixture release server (never live GitHub), an automated test verifies:
+  a newer stable release is installed and reported with the correct old/new version and path; an
+  already-current installation changes nothing; and a missing/mismatched checksum, unsupported
+  platform, or failed download each leave the previously installed executable byte-for-byte
+  unchanged.
 
 ## Assumptions
 

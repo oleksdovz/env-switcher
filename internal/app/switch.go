@@ -10,13 +10,18 @@ import (
 	"github.com/dolf/env-switcher/internal/shell"
 )
 
-// switchCommand resolves project for shellName and writes the resulting shell transaction to
-// the fixed current-env file that the installed wrapper sources after every invocation. Used
-// both by the bare-CLI switch form and by the TUI after a project is picked.
+// switchCommand resolves project for shellName and writes the resulting shell transaction to the
+// fixed current-env file. Used both by the bare-CLI switch form and by the TUI after a project is
+// picked — the only two paths (along with `--select`) that are ever expected to produce this
+// payload; see the installed wrapper templates, which clear current-env before every invocation
+// and source it afterward only if this call recreated it, so every other command (help, list,
+// version, upgrade, ...) leaves the running shell untouched.
 //
-// On any failure it leaves an existing current-env file untouched: the wrapper's unconditional
-// `source` afterward just re-applies the last successful state, which is what "no change on
-// failure" means once activation no longer round-trips through the wrapper for validation.
+// On any failure it leaves current-env exactly as it found it — which, since the wrapper always
+// clears it first, means it stays absent. "No change on failure" here means the wrapper has
+// nothing to source, not "re-apply the last successful switch": once a switch has failed, the
+// values already live in the current shell (from whenever, if ever, it last switched
+// successfully) are left alone rather than redundantly reapplied.
 func switchCommand(shellName, project string, stdout io.Writer) error {
 	if shellName != "bash" && shellName != "zsh" {
 		return &Error{Outcome: OutcomeCompatibility, Op: "switch", Message: "supported shells are bash and zsh"}

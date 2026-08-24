@@ -12,17 +12,23 @@ the installed shell function can forward `"$@"` regardless of which style was ty
 | `env-switcher list` | `--list`, `ls` | List configured projects | Names and directories on stdout; no secrets, no warning |
 | `env-switcher get <project>` | `--get <project>` | Show one project's resolved configuration | stderr advisory, then unmasked values/bodies on stdout; no blocking prompt (stays script-safe) |
 | `env-switcher edit [project]` | `--edit [project]` | Open settings in the resolved editor | Opens the whole file; an unknown `project` is a non-fatal stderr note |
-| `env-switcher validate` | | Validate settings | Diagnostics only |
-| `env-switcher reload` | | Validate settings in a non-TUI invocation | Diagnostics only; TUI F4 additionally replaces its in-memory model |
-| `env-switcher view` | | Show the complete settings file after confirmation | Same warning as TUI F2 |
-| `env-switcher install` | | Install/update integration | Confirmation required unless explicit approval flag |
-| `env-switcher rollback` | | Restore verified backup | Selection and confirmation required |
-| `env-switcher uninstall` | | Remove managed integration | Preserve settings/backups by default |
+| `env-switcher validate` | `--validate` | Validate settings | Diagnostics only |
+| `env-switcher reload` | `--reload` | Validate settings in a non-TUI invocation | Diagnostics only; TUI F4 additionally replaces its in-memory model |
+| `env-switcher view` | `--view` | Show the complete settings file after confirmation | Same warning as TUI F2 |
+| `env-switcher install` | `--install` | Install/update integration | Confirmation required unless explicit approval flag |
+| `env-switcher rollback` | `--rollback` | Restore verified backup | Selection and confirmation required |
+| `env-switcher uninstall` | `--uninstall` | Remove managed integration | Preserve settings/backups by default |
+| `env-switcher upgrade` | `--upgrade` | Install the latest compatible stable release | Progress/result on stdout; never writes `current-env` |
 | `env-switcher version` | `--version` | Show build metadata | Human stdout |
 | `env-switcher help` | `--help`, `-h` | Show usage | Human stdout |
 
 A bare word matching none of the above is treated as `<project>`. `config.Validate` rejects
 project names that collide with a command word, so this is never ambiguous.
+
+Only `env-switcher` (bare), `env-switcher <project>`/`--select`, and a successfully resolved
+switch ever write `current-env`. Every row above besides those — `upgrade` included — is read-only
+with respect to the current shell: see [shell-payload.md](shell-payload.md) for how the wrapper
+enforces that (clear-before, source-after-only-if-rewritten) rather than relying on exit codes.
 
 ## Outcome Classes
 
@@ -47,6 +53,7 @@ bodies, and the generated activation script never appear in process arguments.
 | `F3` | `e` | Open settings in editor |
 | `F4` | `r` | Validate/reload atomically |
 | `F5` | `i` | Confirmed install/update |
+| `F6` | | Confirmed upgrade — drives the identical `env-switcher upgrade` logic, never a separate implementation |
 | `F10` | `q` / `Esc` | Exit without unconfirmed activation |
 
 The footer displays actions. Small terminals use a condensed/scrollable view. F3 suspends and

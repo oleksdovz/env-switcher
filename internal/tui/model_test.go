@@ -14,6 +14,8 @@ import (
 func TestViewShowsSortedProjectsAndKeys(t *testing.T) {
 	s := &config.Settings{Version: 1, Envs: map[string]config.ProjectEnvironment{"z": {Project: "/tmp"}, "a": {Project: "/tmp"}}}
 	m := New(s, "/tmp/settings", Services{})
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = next.(Model)
 	view := m.render()
 	if strings.Index(view, "a") > strings.Index(view, "z") || !strings.Contains(view, "F10/q") {
 		t.Fatalf("unexpected view: %s", view)
@@ -57,8 +59,60 @@ func TestReloadRetainsPreviousModelOnFailureAndWarnsOnChangedFunctions(t *testin
 	}
 }
 
+// TestReloadRebuildsEmptyList covers the case a previously non-empty reload result is dropped:
+// huh.Select.Options is a no-op when passed zero options (it only ever grows/replaces a
+// populated field), so the reload path must rebuild the field from scratch rather than calling
+// Options in place, or a reload down to zero environments would leave stale options on screen.
+func TestReloadRebuildsEmptyList(t *testing.T) {
+	old := &config.Settings{Version: 1, Envs: map[string]config.ProjectEnvironment{"only": {Project: "/tmp"}}}
+	m := New(old, "/tmp/settings", Services{Reload: func() (*config.Settings, error) {
+		return &config.Settings{Version: 1, Envs: map[string]config.ProjectEnvironment{}}, nil
+	}})
+	next, cmd := m.Update(key("r"))
+	m = next.(Model)
+	next, _ = m.Update(cmd())
+	m = next.(Model)
+	if len(m.Settings.Envs) != 0 {
+		t.Fatal("reload did not shrink to zero environments")
+	}
+	if strings.Contains(m.render(), "only") {
+		t.Fatal("stale option survived reload to an empty list")
+	}
+}
+
 func key(text string) tea.KeyPressMsg {
 	return tea.KeyPressMsg(tea.Key{Text: text, Code: []rune(text)[0]})
+}
+
+// drive executes cmd (and anything it returns, recursively — huh's own field→group→form
+// completion travels through a couple of these command/message round trips, e.g. Enter yields a
+// nextFieldMsg command, which in turn yields a nextGroupMsg command) the same way the real Bubble
+// Tea runtime would: run the command, feed the resulting message back into Update, repeat.
+func drive(t *testing.T, m Model, cmd tea.Cmd) Model {
+	t.Helper()
+	for cmd != nil {
+		msg := cmd()
+		if _, ok := msg.(tea.QuitMsg); ok {
+			// The real runtime stops the program here instead of delivering QuitMsg to
+			// Update; do the same, or a completed/aborted form's unconditional "quit again"
+			// response (see forwardToForm) would keep this loop spinning forever.
+			return m
+		}
+		if batch, ok := msg.(tea.BatchMsg); ok {
+			for _, c := range batch {
+				m = drive(t, m, c)
+			}
+			return m
+		}
+		next, nextCmd := m.Update(msg)
+		var ok bool
+		m, ok = next.(Model)
+		if !ok {
+			t.Fatalf("Update returned unexpected model type %T", next)
+		}
+		cmd = nextCmd
+	}
+	return m
 }
 
 func TestKeyboardNavigationSelectionAndF2Warning(t *testing.T) {
@@ -70,10 +124,13 @@ func TestKeyboardNavigationSelectionAndF2Warning(t *testing.T) {
 	}
 	s := &config.Settings{Version: 1, Envs: map[string]config.ProjectEnvironment{"a": {Project: "/tmp"}, "b": {Project: "/tmp"}}}
 	m := New(s, path, Services{})
+	if v, _ := m.field.GetValue().(string); v != "a" {
+		t.Fatalf("initial hover = %q, want a", v)
+	}
 	next, _ := m.Update(key("j"))
 	m = next.(Model)
-	if m.Focus != 1 {
-		t.Fatal("j did not move focus")
+	if v, _ := m.field.GetValue().(string); v != "b" {
+		t.Fatalf("j did not move focus to b, hover=%q", v)
 	}
 	next, _ = m.Update(key("v"))
 	m = next.(Model)
@@ -98,9 +155,14 @@ func TestSmallTerminalViewIsBounded(t *testing.T) {
 		envs[name] = config.ProjectEnvironment{Project: "/tmp"}
 	}
 	m := New(&config.Settings{Version: 1, Envs: envs}, "/tmp/settings", Services{})
-	m.Height = 8
-	if lines := strings.Count(m.render(), "\n"); lines > 9 {
-		t.Fatalf("small view has %d lines", lines)
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 8})
+	m = next.(Model)
+	// Not a tight bound: huh lays its own help/border/description rows out around the capped
+	// option viewport. The point of this test is that a small terminal height doesn't make the
+	// view grow unboundedly with the environment count (100 environments would otherwise dwarf
+	// this), not that it matches the old hand-drawn box's exact line budget.
+	if lines := strings.Count(m.render(), "\n"); lines > m.Height+10 {
+		t.Fatalf("small view has %d lines for height %d", lines, m.Height)
 	}
 }
 
@@ -114,7 +176,73 @@ func TestStableKeyAlternativesAndSelection(t *testing.T) {
 	m := New(&config.Settings{Version: 1, Envs: map[string]config.ProjectEnvironment{"dev": {Project: "/tmp"}}}, "/tmp/settings", Services{})
 	next, cmd := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	selected := next.(Model)
-	if selected.Selected != "dev" || cmd == nil {
+	if cmd == nil {
+		t.Fatal("Enter did not schedule a follow-up command")
+	}
+	selected = drive(t, selected, cmd)
+	if selected.Selected != "dev" {
 		t.Fatal("Enter did not confirm selection")
+	}
+}
+
+// TestSlashDoesNotEnterFilterMode guards the fix in newForm/noFilterKeyMap: huh.Select's "/"
+// filter is a real feature, but leaving it enabled would mean this app's own v/e/r/i/q shortcuts
+// stop working the moment a user starts typing a search (the letters would go to the filter's
+// text box instead), which the pre-huh picker never had to worry about.
+func TestSlashDoesNotEnterFilterMode(t *testing.T) {
+	m := New(&config.Settings{Version: 1, Envs: map[string]config.ProjectEnvironment{"dev": {Project: "/tmp"}, "staging": {Project: "/tmp"}}}, "/tmp/settings", Services{})
+	next, _ := m.Update(key("/"))
+	m = next.(Model)
+	if m.field.GetFiltering() {
+		t.Fatal("\"/\" entered huh's filter mode")
+	}
+	next, _ = m.Update(key("v"))
+	m = next.(Model)
+	if m.mode != "view-warning" {
+		t.Fatal("v shortcut did not fire after pressing /")
+	}
+}
+
+func TestEmptyEnvironmentListRendersAndIgnoresEnter(t *testing.T) {
+	m := New(&config.Settings{Version: 1, Envs: map[string]config.ProjectEnvironment{}}, "/tmp/settings", Services{})
+	view := m.render()
+	if !strings.Contains(view, "F10/q") {
+		t.Fatalf("empty list did not render footer: %s", view)
+	}
+	next, cmd := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = next.(Model)
+	if m.Selected != "" || cmd != nil {
+		t.Fatal("Enter on an empty environment list selected or scheduled a command")
+	}
+	// Quit must still work with nothing to select.
+	next, _ = m.Update(key("q"))
+	if _, ok := next.(Model); !ok {
+		t.Fatal("quit on empty list did not return a Model")
+	}
+}
+
+func TestQuitAndCtrlCAbortWithoutSelecting(t *testing.T) {
+	m := New(&config.Settings{Version: 1, Envs: map[string]config.ProjectEnvironment{"dev": {Project: "/tmp"}}}, "/tmp/settings", Services{})
+	next, cmd := m.Update(key("q"))
+	if next.(Model).Selected != "" || cmd == nil {
+		t.Fatal("q did not schedule quit without selecting")
+	}
+}
+
+func TestInvalidConfigurationSurfacesAsStatusNotCrash(t *testing.T) {
+	m := New(&config.Settings{Version: 1, Envs: map[string]config.ProjectEnvironment{"dev": {Project: "/tmp"}}}, "/tmp/settings",
+		Services{Reload: func() (*config.Settings, error) {
+			return nil, errors.New("yaml: line 3: mapping values are not allowed")
+		}})
+	next, cmd := m.Update(key("r"))
+	m = next.(Model)
+	next, _ = m.Update(cmd())
+	m = next.(Model)
+	if !strings.Contains(m.Status, "mapping values") {
+		t.Fatalf("invalid configuration error not surfaced: %q", m.Status)
+	}
+	// Still renders afterward instead of leaving the model unusable.
+	if !strings.Contains(m.render(), "F10/q") {
+		t.Fatal("model unusable after invalid configuration reload")
 	}
 }

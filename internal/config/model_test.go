@@ -18,6 +18,54 @@ func TestValidateRejectsReservedAndCrossKindNames(t *testing.T) {
 	}
 }
 
+// TestUpgradeIsAReservedProjectName guards the "upgrade"/"--upgrade" CLI command: a project
+// named "upgrade" would be unreachable through the bare-word switch form (`env-switcher
+// upgrade` would run the upgrade command, not switch to a same-named project), so it must be
+// rejected the same way "install"/"reload"/etc. already are.
+func TestUpgradeIsAReservedProjectName(t *testing.T) {
+	if !IsReservedProjectName("upgrade") {
+		t.Fatal(`"upgrade" is not in ReservedProjectNames`)
+	}
+	s := &Settings{Version: 1, Envs: map[string]ProjectEnvironment{"upgrade": {Project: "/tmp"}}}
+	if err := Validate(s); err == nil {
+		t.Fatal("expected validation to reject a project literally named \"upgrade\"")
+	}
+}
+
+// TestShellFunctionNamesAllowShellSafeSeparators guards against re-applying the stricter
+// variable-identifier regex to function names: bash/zsh function names are command names, not
+// variable identifiers, and both shells accept hyphens/dots/colons between segments (e.g.
+// "k-load", reported as incorrectly rejected before this fix).
+func TestShellFunctionNamesAllowShellSafeSeparators(t *testing.T) {
+	body := "echo ok"
+	for _, name := range []string{"k-load", "git.foo", "my:thing", "a-b-c", "plain"} {
+		s := &Settings{Version: 1, Envs: map[string]ProjectEnvironment{"dev": {Project: "/tmp", ShellFunctions: map[string]string{name: body}}}}
+		if err := Validate(s); err != nil {
+			t.Errorf("function name %q rejected: %v", name, err)
+		}
+	}
+}
+
+func TestShellFunctionNamesStillRejectUnsafeForms(t *testing.T) {
+	body := "echo ok"
+	for _, name := range []string{"-load", "load-", "lo--ad", "with space", "with/slash", "1load"} {
+		s := &Settings{Version: 1, Envs: map[string]ProjectEnvironment{"dev": {Project: "/tmp", ShellFunctions: map[string]string{name: body}}}}
+		if err := Validate(s); err == nil {
+			t.Errorf("function name %q should have been rejected", name)
+		}
+	}
+}
+
+// TestVariableNamesStillRejectShellSafeSeparators proves the loosened function-name rule did not
+// leak into env-var validation: a variable named "k-load" would be an invalid `export` target
+// (POSIX variable names cannot contain hyphens), so it must still be rejected.
+func TestVariableNamesStillRejectShellSafeSeparators(t *testing.T) {
+	s := &Settings{Version: 1, Envs: map[string]ProjectEnvironment{"dev": {Project: "/tmp", EnvVars: map[string]string{"k-load": "x"}}}}
+	if err := Validate(s); err == nil {
+		t.Fatal("hyphenated variable name should have been rejected")
+	}
+}
+
 func TestFunctionDigestIsDeterministic(t *testing.T) {
 	body := "echo ok"
 	a := &Settings{Version: 1, Envs: map[string]ProjectEnvironment{"dev": {Project: "/tmp", ShellFunctions: map[string]string{"f": body}}}}

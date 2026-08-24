@@ -5,153 +5,221 @@ import (
 	"sort"
 
 	tea "charm.land/bubbletea/v2"
+	huh "charm.land/huh/v2"
 	"github.com/dolf/env-switcher/internal/config"
 	"github.com/dolf/env-switcher/internal/editor"
+	"github.com/dolf/env-switcher/internal/upgrade"
 )
 
 type Services struct {
 	Reload  func() (*config.Settings, error)
 	Install func() error
+	// Upgrade is the same upgrade.Upgrader.Upgrade call the "upgrade"/"--upgrade" CLI command
+	// uses (see internal/app/upgrade.go and tuiCommand's wiring): F6 only ever triggers it, it
+	// never reimplements any part of the upgrade itself.
+	Upgrade func() (upgrade.Result, error)
 }
+
+// Model is the outer Bubble Tea model. It owns nothing about how an environment is picked —
+// that's the embedded huh.Form's job — and is responsible only for application-level keyboard
+// events (view/edit/reload/install/quit) and the small set of yes/no confirmation dialogs those
+// can raise. See render.go for how the two are composed on screen.
 type Model struct {
 	Settings                             *config.Settings
-	Projects                             []string
-	Focus                                int
 	Selected, Status                     string
 	Width, Height                        int
 	mode, settingsPath, digest, fullFile string
 	services                             Services
+	form                                 *huh.Form
+	field                                *huh.Select[string]
 }
+
 type operationMsg struct {
 	kind     string
 	settings *config.Settings
 	err      error
+	// message overrides the default "operation completed" status text on success, for
+	// operations (upgrade) that have something more specific to report.
+	message string
 }
 
 func New(settings *config.Settings, path string, services Services) Model {
-	m := Model{Settings: settings, settingsPath: path, services: services, digest: config.FunctionDigest(settings)}
-	m.setProjects()
+	field := newSelectField(settings, "")
+	m := Model{
+		Settings:     settings,
+		settingsPath: path,
+		services:     services,
+		digest:       config.FunctionDigest(settings),
+		field:        field,
+		form:         newForm(field),
+	}
 	if !config.IsAcknowledged(m.digest) && config.HasFunctions(settings) {
 		m.mode = "trust"
 	}
 	return m
 }
-func (m Model) Init() tea.Cmd { return nil }
+
+func (m Model) Init() tea.Cmd { return m.form.Init() }
+
 func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
+	if msg, ok := message.(tea.WindowSizeMsg); ok {
+		m.Width, m.Height = msg.Width, msg.Height
+	}
 	switch msg := message.(type) {
-	case tea.WindowSizeMsg:
-		m.Width = msg.Width
-		m.Height = msg.Height
 	case operationMsg:
-		if msg.err != nil {
-			m.Status = msg.err.Error()
-		} else if msg.kind == "reload" {
-			focused := ""
-			if len(m.Projects) > 0 && m.Focus < len(m.Projects) {
-				focused = m.Projects[m.Focus]
-			}
-			m.Settings = msg.settings
-			m.digest = config.FunctionDigest(msg.settings)
-			m.setProjects()
-			if focused != "" {
-				for i, name := range m.Projects {
-					if name == focused {
-						m.Focus = i
-						break
-					}
-				}
-			}
-			if config.HasFunctions(msg.settings) && !config.IsAcknowledged(m.digest) {
-				m.mode = "trust"
-			}
-			m.Status = "projects reloaded"
-		} else {
-			m.Status = "operation completed"
-		}
-		return m, nil
+		return m.handleOperation(msg)
 	case tea.KeyPressMsg:
-		a := action(msg.Keystroke())
 		if m.mode != "" {
-			if a == "n" || a == "quit" {
-				m.mode = ""
-				m.fullFile = ""
-				return m, nil
-			}
-			if a == "y" {
-				switch m.mode {
-				case "trust":
-					if err := config.Acknowledge(m.digest); err != nil {
-						m.Status = err.Error()
-					} else {
-						m.Status = "trusted function warning acknowledged"
-					}
-				case "view-warning":
-					b, err := os.ReadFile(m.settingsPath)
-					if err != nil {
-						m.Status = err.Error()
-					} else {
-						m.fullFile = string(b)
-						m.mode = "view"
-					}
-				case "install-warning":
-					m.mode = ""
-					return m, m.installCmd()
-				}
-				if m.mode != "view" {
-					m.mode = ""
-				}
-			}
-			return m, nil
+			return m.handleDialogKey(msg)
 		}
-		switch a {
-		case "up":
-			if m.Focus > 0 {
-				m.Focus--
+		if next, cmd, handled := m.handleShortcut(msg); handled {
+			return next, cmd
+		}
+	}
+	return m.forwardToForm(message)
+}
+
+// handleShortcut handles the application-level keys that exist outside of (and take priority
+// over) the embedded select field: view/edit/reload/install/quit. Anything it doesn't recognize
+// falls through to the form, which is where navigation (up/down/enter) is actually handled.
+func (m Model) handleShortcut(msg tea.KeyPressMsg) (Model, tea.Cmd, bool) {
+	switch action(msg.Keystroke()) {
+	case "view":
+		m.mode = "view-warning"
+		return m, nil, true
+	case "edit":
+		cmd, err := editor.Command(m.settingsPath)
+		if err != nil {
+			m.Status = err.Error()
+			return m, nil, true
+		}
+		return m, tea.ExecProcess(cmd, func(err error) tea.Msg { return operationMsg{kind: "edit", err: err} }), true
+	case "reload":
+		return m, m.reloadCmd(), true
+	case "install":
+		m.mode = "install-warning"
+		return m, nil, true
+	case "upgrade":
+		m.mode = "upgrade-warning"
+		return m, nil, true
+	case "quit":
+		return m, tea.Quit, true
+	case "select":
+		if len(m.Settings.Envs) == 0 {
+			// Nothing to select; swallow Enter instead of letting an empty select field
+			// complete the form with a zero-value selection.
+			return m, nil, true
+		}
+	}
+	return m, nil, false
+}
+
+// handleDialogKey handles the y/n (and quit) keys for the trust/view/install confirmation
+// dialogs. It is unchanged from the pre-huh implementation: these are plain text prompts, not
+// something huh provides a field for, so they stay hand-rolled (see render.go).
+func (m Model) handleDialogKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
+	a := action(msg.Keystroke())
+	if a == "n" || a == "quit" {
+		m.mode = ""
+		m.fullFile = ""
+		return m, nil
+	}
+	if a == "y" {
+		switch m.mode {
+		case "trust":
+			if err := config.Acknowledge(m.digest); err != nil {
+				m.Status = err.Error()
+			} else {
+				m.Status = "trusted function warning acknowledged"
 			}
-		case "down":
-			if m.Focus+1 < len(m.Projects) {
-				m.Focus++
-			}
-		case "select":
-			if len(m.Projects) > 0 {
-				m.Selected = m.Projects[m.Focus]
-				return m, tea.Quit
-			}
-		case "quit":
-			return m, tea.Quit
-		case "view":
-			m.mode = "view-warning"
-		case "edit":
-			cmd, err := editor.Command(m.settingsPath)
+		case "view-warning":
+			b, err := os.ReadFile(m.settingsPath)
 			if err != nil {
 				m.Status = err.Error()
 			} else {
-				return m, tea.ExecProcess(cmd, func(err error) tea.Msg { return operationMsg{kind: "edit", err: err} })
+				m.fullFile = string(b)
+				m.mode = "view"
 			}
-		case "reload":
-			return m, m.reloadCmd()
-		case "install":
-			m.mode = "install-warning"
+		case "install-warning":
+			m.mode = ""
+			return m, m.installCmd()
+		case "upgrade-warning":
+			m.mode = ""
+			return m, m.upgradeCmd()
+		}
+		if m.mode != "view" {
+			m.mode = ""
 		}
 	}
 	return m, nil
 }
-func (m *Model) setProjects() {
-	m.Projects = m.Projects[:0]
-	for name := range m.Settings.Envs {
-		m.Projects = append(m.Projects, name)
+
+// forwardToForm passes any message the outer model doesn't intercept (navigation keys, window
+// resizes, exec/tick results, ...) down to the embedded huh.Form, then checks whether that
+// completed or aborted the form.
+func (m Model) forwardToForm(message tea.Msg) (tea.Model, tea.Cmd) {
+	next, cmd := m.form.Update(message)
+	if f, ok := next.(*huh.Form); ok {
+		m.form = f
 	}
-	sort.Strings(m.Projects)
-	if m.Focus >= len(m.Projects) {
-		m.Focus = 0
+	switch m.form.State {
+	case huh.StateCompleted:
+		if v, ok := m.field.GetValue().(string); ok {
+			m.Selected = v
+		}
+		return m, tea.Quit
+	case huh.StateAborted:
+		// Cancellation (e.g. ctrl+c) is a normal exit, same as F10/q: leave Selected empty.
+		return m, tea.Quit
+	}
+	return m, cmd
+}
+
+func (m Model) handleOperation(msg operationMsg) (Model, tea.Cmd) {
+	if msg.err != nil {
+		m.Status = msg.err.Error()
+		return m, nil
+	}
+	if msg.kind == "reload" {
+		focused, _ := m.field.GetValue().(string)
+		m.Settings = msg.settings
+		m.digest = config.FunctionDigest(msg.settings)
+		m.field = newSelectField(msg.settings, focused)
+		m.setForm(newForm(m.field))
+		if config.HasFunctions(msg.settings) && !config.IsAcknowledged(m.digest) {
+			m.mode = "trust"
+		}
+		m.Status = "projects reloaded"
+		return m, nil
+	}
+	if msg.message != "" {
+		m.Status = msg.message
+	} else {
+		m.Status = "operation completed"
+	}
+	return m, nil
+}
+
+// setForm installs a freshly built form (used on reload, since the environment list itself may
+// have changed shape) and immediately seeds it with the last known terminal size, since a
+// replacement form otherwise won't see another tea.WindowSizeMsg until the next real resize.
+func (m *Model) setForm(form *huh.Form) {
+	m.form = form
+	if m.Width > 0 || m.Height > 0 {
+		next, _ := m.form.Update(tea.WindowSizeMsg{Width: m.Width, Height: m.Height})
+		if f, ok := next.(*huh.Form); ok {
+			m.form = f
+		}
 	}
 }
+
 func (m Model) reloadCmd() tea.Cmd {
 	return func() tea.Msg {
 		s, err := m.services.Reload()
 		return operationMsg{kind: "reload", settings: s, err: err}
 	}
 }
+
 func (m Model) installCmd() tea.Cmd {
 	return func() tea.Msg {
 		if m.services.Install == nil {
@@ -160,4 +228,77 @@ func (m Model) installCmd() tea.Cmd {
 		return operationMsg{kind: "install", err: m.services.Install()}
 	}
 }
+
+func (m Model) upgradeCmd() tea.Cmd {
+	return func() tea.Msg {
+		if m.services.Upgrade == nil {
+			return operationMsg{kind: "upgrade", err: os.ErrInvalid}
+		}
+		result, err := m.services.Upgrade()
+		if err != nil {
+			return operationMsg{kind: "upgrade", err: err}
+		}
+		if result.AlreadyCurrent {
+			return operationMsg{kind: "upgrade", message: "already up to date (" + result.NewVersion + ")"}
+		}
+		return operationMsg{kind: "upgrade", message: "upgraded " + result.OldVersion + " -> " + result.NewVersion}
+	}
+}
+
 func (m Model) View() tea.View { return tea.NewView(m.render()) }
+
+// newSelectField builds the huh.Select used for environment selection: one option per configured
+// project, sorted, with the project's directory shown as a description alongside its name. If
+// focused names a project still present in settings, that option starts pre-selected so a reload
+// preserves the user's place in the list, matching the pre-huh model.
+func newSelectField(settings *config.Settings, focused string) *huh.Select[string] {
+	names := sortedEnvNames(settings)
+	opts := make([]huh.Option[string], 0, len(names))
+	for _, name := range names {
+		opt := huh.NewOption(optionLabel(settings, name), name)
+		if name == focused {
+			opt = opt.Selected(true)
+		}
+		opts = append(opts, opt)
+	}
+	return huh.NewSelect[string]().
+		Key("env").
+		Title("Select an environment").
+		Filtering(false).
+		Options(opts...)
+}
+
+// optionLabel shows the environment name plus its configured directory as a lightweight
+// description, when one is set — huh.Select displays options as plain strings, so this is folded
+// into the option's own label rather than a separate widget.
+func optionLabel(settings *config.Settings, name string) string {
+	if dir := settings.Envs[name].Project; dir != "" {
+		return name + "  " + dir
+	}
+	return name
+}
+
+func sortedEnvNames(settings *config.Settings) []string {
+	names := make([]string, 0, len(settings.Envs))
+	for name := range settings.Envs {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func newForm(field *huh.Select[string]) *huh.Form {
+	return huh.NewForm(huh.NewGroup(field).Title("env-switcher")).WithTheme(Theme).WithKeyMap(noFilterKeyMap())
+}
+
+// noFilterKeyMap disables huh's "/" search-filter for the select field. Filtering is a real huh
+// feature, not something recreated here, but it's turned off rather than left on: while it's
+// active, typed letters go to the filter's own text box, including v/e/r/i/q — this app's own
+// single-letter shortcuts. Leaving both live at once would mean those shortcuts silently stop
+// working the moment a user starts typing a search, and the pre-huh picker never had a filter
+// mode to begin with, so disabling it keeps the field a plain, single-mode navigation list.
+func noFilterKeyMap() *huh.KeyMap {
+	km := huh.NewDefaultKeyMap()
+	km.Select.Filter.SetEnabled(false)
+	return km
+}

@@ -98,4 +98,16 @@ func testPTYSelection(t *testing.T, shellName string) {
 	if !strings.Contains(string(currentEnv), "PROJECT_VALUE='dev'") {
 		t.Fatal("selection did not write the resolved environment to current-env")
 	}
+	if !strings.Contains(string(currentEnv), "export _PROJECT='"+project+"'") {
+		t.Fatalf("interactive TUI selection did not resolve _PROJECT: %q", currentEnv)
+	}
+	// The shell payload is written directly by switchCommand, entirely separate from the TUI's
+	// own screen output — but the TUI's rendering (lipgloss styles, box-drawing borders, the
+	// huh-based form) does write real ANSI escape sequences and control characters to the pty,
+	// so assert none of that leaked into the file Bash/Zsh will `source`.
+	for _, b := range currentEnv {
+		if b == 0x1b || (b < 0x20 && b != '\n' && b != '\t') {
+			t.Fatalf("shell payload contains a control/escape byte 0x%02x: %q", b, currentEnv)
+		}
+	}
 }

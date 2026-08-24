@@ -69,6 +69,7 @@ func selfUpdate(current, installedExe string, stdout, stderr io.Writer) {
 		if result.Changed {
 			_, _ = fmt.Fprintf(stdout, "updated env-switcher at %s\n", installedExe)
 		}
+		migrateLegacyExecutable(stdout, stderr)
 		return
 	}
 	binary, err := os.ReadFile(current)
@@ -81,6 +82,7 @@ func selfUpdate(current, installedExe string, stdout, stderr io.Writer) {
 		return
 	}
 	_, _ = fmt.Fprintf(stdout, "updated env-switcher at %s\n", installedExe)
+	migrateLegacyExecutable(stdout, stderr)
 }
 
 func selfInstallFresh(current, installedExe string, stdin io.Reader, stdout, stderr io.Writer) {

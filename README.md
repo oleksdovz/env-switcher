@@ -1,9 +1,12 @@
 # env-switcher
 
-`env-switcher` is a local Go CLI and keyboard-driven Bubble Tea TUI for switching a project's
-environment variables and trusted shell functions in the current Bash or Zsh process. It supports
-Linux and macOS. Switching never changes the shell's current directory — each project's `project:`
-path in `settings.yaml` is informational metadata only (shown by `list`/`get`), not a `cd` target.
+`env-switcher` is a local Go CLI and keyboard-driven TUI for switching a project's environment
+variables and trusted shell functions in the current Bash or Zsh process. The picker itself is a
+[charm.land/huh](https://github.com/charmbracelet/huh) `Select` field, embedded in a small outer
+Bubble Tea model that owns only the application-level shortcuts (view/edit/reload/install/
+upgrade/quit). It supports Linux and macOS. Switching never changes the shell's current directory
+— each project's `project:` path in `settings.yaml` is informational metadata only (shown by
+`list`/`get`), not a `cd` target.
 
 ## Build and validate
 
@@ -50,15 +53,20 @@ env-switcher view             show the complete settings.yaml after confirmation
 env-switcher install          install or update shell integration
 env-switcher rollback         restore the previous shell profile backup
 env-switcher uninstall        remove the managed shell integration
+env-switcher upgrade          install the latest compatible release
 env-switcher version          print build metadata
 env-switcher help             show help
 ```
 
 Every command above also accepts an equivalent `--flag` form (`--list`, `--get`, `--edit`,
+`--validate`, `--reload`, `--view`, `--install`, `--rollback`, `--uninstall`, `--upgrade`,
 `--version`, `--select`) so the installed shell function can forward `"$@"` regardless of style.
 
 The TUI keys are `Enter` to select, `F2`/`v` to view, `F3`/`e` to edit, `F4`/`r` to reload,
-`F5`/`i` to install, and `F10`/`q` to exit.
+`F5`/`i` to install, `F6` to upgrade, and `F10`/`q` to exit. Only `Enter` (and, at the CLI,
+`env-switcher <project>`/`--select`) ever activate a project — every other command, including
+`--help` and `upgrade`, is read-only with respect to the current shell (see "How switching works"
+below).
 
 ## How switching works
 
@@ -67,24 +75,30 @@ Installation adds a managed block like this to `.bashrc`/`.zshrc`:
 ```bash
 #env-switcher
 env-switcher() {
-  local __env_switcher_status
+  local __env_switcher_status __env_switcher_payload="$HOME/.env-switcher/current-env"
+  rm -f "$__env_switcher_payload"
   __ENV_SWITCHER_TARGET_SHELL=bash "$HOME/.env-switcher/bin/env-switcher" "$@"
   __env_switcher_status=$?
-  [ -f "$HOME/.env-switcher/current-env" ] && source "$HOME/.env-switcher/current-env"
+  [ -f "$__env_switcher_payload" ] && source "$__env_switcher_payload"
   return $__env_switcher_status
 }
 ```
 
-Selecting a project (through the TUI or `env-switcher <project>`) resolves the effective variables,
-shell functions, and shell-cmd hooks, then writes them as a plain shell script to
-`~/.env-switcher/current-env` (mode `0600`). The wrapper function immediately `source`s that file,
-which defines the functions and exports the variables — it never changes directory, and it never
-removes anything a previously active project set; each switch only ever adds/overwrites the newly
-selected project's own definitions on top of whatever the shell already has. There's no
-snapshot/rollback either: if one name fails to apply (e.g. it's already `readonly` in your shell),
-the shell reports its own error for that one statement and everything else in the file still
-applies. If a switch fails to resolve at all, `current-env` is left untouched, so sourcing it again
-just reapplies the last successful state.
+Selecting a project (through the TUI, `env-switcher <project>`, or `env-switcher --select
+[project]`) resolves the effective variables, shell functions, and shell-cmd hooks, then writes
+them as a plain shell script to `~/.env-switcher/current-env` (mode `0600`). Those are the only
+three actions that ever write it. The wrapper clears that file *before* every invocation and only
+`source`s it afterward if the invocation just rewrote it — so a switch defines the functions and
+exports the variables (never changing directory, never removing anything a previously active
+project set — each switch only ever adds/overwrites the newly selected project's own definitions
+on top of whatever the shell already has), while every other command (`--help`, `list`, `get`,
+`version`, `validate`, `reload`, `view`, `edit`, `install`, `upgrade`, `rollback`, `uninstall`)
+leaves the running shell exactly as it was, even if an earlier switch in that session left
+something at `current-env`. There's no snapshot/rollback within a switch either: if one name
+fails to apply (e.g. it's already `readonly` in your shell), the shell reports its own error for
+that one statement and everything else in the file still applies. If a switch attempt fails to
+resolve at all, nothing is written, so the wrapper has nothing to source and the shell is left
+exactly as it already was.
 
 ## Configuration examples
 
@@ -93,6 +107,24 @@ form); a function needing genuinely different behavior per shell branches on `$Z
 runtime. `shell-cmd` is an anonymous hook (shared and/or per-project, both run if both are set)
 that executes as the last step of every switch — for one-off setup that doesn't need to be a
 named, callable function.
+
+Every switch also sets `_PROJECT`, a reserved variable holding `project` resolved to a clean
+absolute path (`~/`, `$HOME`, and `${HOME}` are expanded; nothing else is). Don't declare it
+yourself — env-switcher always overwrites it — but do use it, quoted, in `env-vars` (as
+`$_PROJECT`/`${_PROJECT}`, substituted the same way), `shell-functions`, and `shell-cmd`:
+
+```yaml
+shared:
+  shell-functions:
+    cd_project: |
+      cd "$_PROJECT"
+
+envs:
+  dev:
+    project: $HOME/projects/dev
+    env-vars:
+      CODEX_HOME: $_PROJECT/.codex
+```
 
 ### Simple
 
@@ -205,6 +237,31 @@ document's total size after resolving every alias is capped independently of the
 see [settings-schema.md](specs/001-env-switching/contracts/settings-schema.md) for the exact
 rules. The shipped starter file (created on first run) is a larger worked example combining all of
 the above, plus Unicode values and other edge cases.
+
+## Upgrading
+
+```bash
+env-switcher upgrade      # or: env-switcher --upgrade
+```
+
+Checks the latest **stable** (non-draft, non-prerelease) release of
+[oleksdovz/env-switcher](https://github.com/oleksdovz/env-switcher) against the running build's
+own version, using semantic-version comparison — not just "most recently published" — and reports
+`env-switcher is already up to date (<version>)` if nothing newer is available. Otherwise it:
+
+1. picks the release asset matching the running `GOOS`/`GOARCH` (failing with an actionable
+   message, listing what the release *does* publish, if there's no build for your platform);
+2. downloads it to a temporary file in `~/.env-switcher/bin/`;
+3. verifies it against the release's published `SHA256SUMS` — a release with no checksum file is
+   treated as a hard failure, never installed unverified;
+4. if the asset is an archive, extracts only the single expected `env-switcher` executable,
+   rejecting absolute paths, `..` traversal, symlinks, or any other archive entry;
+5. atomically replaces `~/.env-switcher/bin/env-switcher`, then prints the old version, new
+   version, and installed path.
+
+The existing binary is left untouched if any of these steps fails. `F6` in the interactive picker
+(with a confirmation dialog first) runs the exact same upgrade logic — see
+`internal/upgrade` and `internal/app/upgrade.go` — it's never reimplemented in the TUI.
 
 > `settings.yaml` and `current-env` are plaintext and not a secure secret store. Use short-lived
 > credentials and a dedicated secret manager for sensitive environments.

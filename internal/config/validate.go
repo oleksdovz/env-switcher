@@ -10,6 +10,14 @@ import (
 
 var identifierRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
+// functionNameRE is deliberately more permissive than identifierRE: a shell *variable* name must
+// be a plain POSIX identifier, but a shell *function* name is just a command name to bash/zsh, and
+// both shells legitimately accept hyphens/dots/colons between segments (e.g. "k-load", "git.foo").
+// This only keeps the character set sane — it must start with a letter/underscore, so it can never
+// be confused with an option flag — and it's shell.ValidateFunction's actual bash -n/zsh -n parse
+// that's the authority on whether a given name is syntactically acceptable to the target shell.
+var functionNameRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*([.:-][A-Za-z0-9_]+)*$`)
+
 // ReservedProjectNames are CLI keywords that double as the bare-word "switch to <env>" form
 // (e.g. `env-switcher list`). A project sharing one of these names would be unreachable through
 // that form, so configuration rejects the collision up front. internal/app reuses this list so
@@ -17,12 +25,21 @@ var identifierRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 var ReservedProjectNames = map[string]struct{}{
 	"help": {}, "list": {}, "ls": {}, "edit": {}, "get": {}, "version": {},
 	"validate": {}, "install": {}, "rollback": {}, "uninstall": {}, "reload": {}, "view": {},
+	"upgrade": {},
 }
 
 func IsReservedProjectName(name string) bool {
 	_, ok := ReservedProjectNames[name]
 	return ok
 }
+
+// ProjectVarName is the reserved, application-managed environment variable holding an
+// environment's resolved (expanded, cleaned, absolute) `project` directory — see
+// internal/environment.Resolve. A manually declared value under this name in either shared or
+// project env-vars is accepted by validation (so existing configuration written before this
+// variable existed keeps loading) but is always overwritten by the computed value at resolve
+// time; it is never an error.
+const ProjectVarName = "_PROJECT"
 
 func Validate(s *Settings) error {
 	if s.Version != SchemaVersion {
@@ -77,7 +94,7 @@ func validateDefinitions(path string, vars map[string]string, funcs map[string]s
 	}
 	for _, name := range sortedKeys(vars) {
 		value := vars[name]
-		if err := validateName(path+".env-vars", name); err != nil {
+		if err := validateVarName(path+".env-vars", name); err != nil {
 			return err
 		}
 		if len(value) > MaxValueSize || strings.ContainsRune(value, 0) || !utf8.ValidString(value) {
@@ -85,7 +102,7 @@ func validateDefinitions(path string, vars map[string]string, funcs map[string]s
 		}
 	}
 	for _, name := range sortedKeys(funcs) {
-		if err := validateName(path+".shell-functions", name); err != nil {
+		if err := validateFunctionName(path+".shell-functions", name); err != nil {
 			return err
 		}
 		if err := validateBody(path+".shell-functions."+name, funcs[name]); err != nil {
@@ -125,9 +142,16 @@ func sortedKeys[V any](m map[string]V) []string {
 	return keys
 }
 
-func validateName(path, name string) error {
+func validateVarName(path, name string) error {
 	if !identifierRE.MatchString(name) || strings.HasPrefix(name, "__ENV_SWITCHER_") {
 		return fmt.Errorf("%s.%s: invalid or reserved identifier", path, name)
+	}
+	return nil
+}
+
+func validateFunctionName(path, name string) error {
+	if !functionNameRE.MatchString(name) || strings.HasPrefix(name, "__ENV_SWITCHER_") {
+		return fmt.Errorf("%s.%s: invalid or reserved function name", path, name)
 	}
 	return nil
 }

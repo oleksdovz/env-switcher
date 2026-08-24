@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/dolf/env-switcher/internal/config"
 )
@@ -28,10 +29,9 @@ func New(build BuildInfo) *App { return &App{build: build} }
 //
 // The default (no-args) invocation additionally self-installs: see selfInstall.
 func (a *App) Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
-	_ = ctx
 	if len(args) == 0 {
 		selfInstall(stdin, stdout, stderr)
-		if err := tuiCommand(stdin, stdout, stderr); err != nil {
+		if err := tuiCommand(ctx, a.build.Version, stdin, stdout, stderr); err != nil {
 			return report(stderr, err)
 		}
 		return OutcomeSuccess.ExitCode()
@@ -58,17 +58,17 @@ func (a *App) Run(ctx context.Context, args []string, stdin io.Reader, stdout, s
 	case "version", "--version":
 		_, _ = fmt.Fprintf(stdout, "env-switcher %s commit=%s built=%s\n", a.build.Version, a.build.Commit, a.build.Date)
 		return OutcomeSuccess.ExitCode()
-	case "validate":
+	case "validate", "--validate":
 		if err := validateCommand(stdout); err != nil {
 			return report(stderr, err)
 		}
 		return OutcomeSuccess.ExitCode()
-	case "view":
+	case "view", "--view":
 		if err := viewCommand(stdin, stdout, stderr); err != nil {
 			return report(stderr, err)
 		}
 		return OutcomeSuccess.ExitCode()
-	case "reload":
+	case "reload", "--reload":
 		path, err := config.SettingsPath()
 		if err == nil {
 			_, err = reloadSettings(path, nil)
@@ -79,8 +79,14 @@ func (a *App) Run(ctx context.Context, args []string, stdin io.Reader, stdout, s
 		}
 		_, _ = fmt.Fprintln(stdout, "projects reloaded")
 		return OutcomeSuccess.ExitCode()
-	case "install", "rollback", "uninstall":
-		if err := installCommand(args[0], args[1:], stdin, stdout, stderr); err != nil {
+	case "install", "--install", "rollback", "--rollback", "uninstall", "--uninstall":
+		action := strings.TrimPrefix(args[0], "--")
+		if err := installCommand(action, args[1:], stdin, stdout, stderr); err != nil {
+			return report(stderr, err)
+		}
+		return OutcomeSuccess.ExitCode()
+	case "upgrade", "--upgrade":
+		if err := upgradeCommand(ctx, newUpgrader(), a.build.Version, stdout, stderr); err != nil {
 			return report(stderr, err)
 		}
 		return OutcomeSuccess.ExitCode()

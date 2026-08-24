@@ -20,11 +20,13 @@ Usage:
   env-switcher install          install or update shell integration
   env-switcher rollback         restore the previous shell profile backup
   env-switcher uninstall        remove the managed shell integration
+  env-switcher upgrade          install the latest compatible release
   env-switcher version          print build metadata
   env-switcher help             show this help
 
-Every command above also accepts a "--flag" form (--list, --get, --edit, --version, --select)
-for the same action. TUI keys: Enter select, F2/v view, F3/e edit, F4/r reload, F5/i install,
+Every command above also accepts an equivalent "--flag" form (--list, --get, --edit, --validate,
+--reload, --view, --install, --rollback, --uninstall, --upgrade, --version, --select) for the
+same action. TUI keys: Enter select, F2/v view, F3/e edit, F4/r reload, F5/i install, F6 upgrade,
 F10/q exit.
 `
 

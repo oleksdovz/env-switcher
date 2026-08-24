@@ -39,13 +39,16 @@ additive across scopes, not replaced (see Shell Command Hook below).
 | Field | Type | Required | Rules |
 |-------|------|----------|-------|
 | project map key | string | yes | 1-64 characters; unique, case-sensitive, not a reserved CLI command word |
-| `project` | path string | yes | Non-empty; `~` allowed only as first path segment |
+| `project` | path string | yes | Non-empty; `~`/`~/` or `$HOME`/`${HOME}` expanded; must resolve to a clean absolute path |
 | `env-vars` | map of identifier to string | no | 0-100 unique names |
 | `shell-functions` | map of identifier to Shell Function Definition body | no | 0-100 unique names; trusted local code |
 | `shell-cmd` | Shell Command Hook body | no | Trusted local code; runs after the shared one |
 
-`project` is informational metadata only — shown by `list`/`get` — not a switching target.
-Switching never runs `cd` and never checks whether the path exists or is a directory.
+`project` is shown by `list`/`get` exactly as configured (unexpanded) and is not a switching
+target — switching never runs `cd` and never checks whether the path exists or is a directory. It
+is, however, resolved (expanding `~`/`~/`/`$HOME`/`${HOME}`, no other expansion, never a shell) into
+the reserved `_PROJECT` variable on every switch; an empty, relative, or otherwise unresolved
+`project` fails the switch.
 
 ## Environment Variable Definition
 
@@ -55,16 +58,35 @@ Switching never runs `cd` and never checks whether the path exists or is a direc
 | value | string | UTF-8; empty allowed; NUL prohibited; maximum 64 KiB |
 | source | enum | `shared` or `project`; derived |
 
-Values are opaque literals: no `$`, command, glob, escape, or tilde expansion. Exact case-sensitive
-project names override shared names.
+Values are opaque literals: no command, glob, escape, or tilde expansion, and no arbitrary variable
+expansion — except that `$_PROJECT`/`${_PROJECT}` is substituted with the environment's resolved
+`project` path (see Project Environment and Reserved Project Variable, below). No other `$name` is
+expanded. Exact case-sensitive project names override shared names.
+
+## Reserved Project Variable (`_PROJECT`)
+
+A reserved, application-managed `env-vars` name (not a distinct schema field): env-switcher sets
+it automatically, in both the shared and project scope of every Effective Environment, to the
+environment's resolved `project` path. Declaring `_PROJECT` yourself under `env-vars` is accepted
+by validation (so settings written before this variable existed keep loading) but is always
+overwritten by the computed value when an environment is resolved — a declared value is never used
+and never an error. It is available to other `env-vars` values via substitution (above), and to
+shared/project `shell-functions`/`shell-cmd` as an ordinary exported shell variable.
 
 ## Shell Function Definition
 
 | Field | Type | Rules |
 |-------|------|-------|
-| name | string | Same identifier rule; reserved internal prefix rejected |
+| name | string | `[A-Za-z_][A-Za-z0-9_]*`, optionally followed by `.`/`:`/`-`-separated segments (e.g. `k-load`); reserved internal prefix rejected |
 | body | string | One body, offered to whichever shell is active; UTF-8 trusted code; non-empty; NUL prohibited; maximum 256 KiB |
 | source | enum | `shared` or `project`; derived |
+
+A function name is deliberately a superset of the Environment Variable Definition's identifier
+rule: bash/zsh function names are command names, not variable identifiers, and both shells accept
+`k-load`-style hyphenated (or dotted/colon-separated) names, unlike a variable name (which must
+stay a plain POSIX identifier to be a valid `export` target). `shell.ValidateFunction`'s
+`bash -n`/`zsh -n` parse remains the actual authority on whether a given name is syntactically
+acceptable to the target shell — the schema-level rule only keeps the character set sane.
 
 There is no per-shell body split: one body is syntax-checked against, and offered to, whichever
 shell is active at switch time. A function that genuinely needs different behavior per shell
@@ -87,18 +109,23 @@ warning.
 
 ## Effective Environment
 
-Immutable derived data containing selected name, sorted effective variables, sorted effective
-functions, ordered shell-cmd hooks, target shell, and deterministic configuration digest. It does
-not carry a directory — switching does not resolve or use one.
+Immutable derived data containing selected name, sorted effective variables (`_PROJECT` always
+among them — see Reserved Project Variable), sorted effective functions, ordered shell-cmd hooks,
+target shell, and deterministic configuration digest. There is no separate directory field —
+switching does not `cd` — but the resolved `project` path is carried as the `_PROJECT` variable
+like any other.
 
 Derivation order:
 
 1. validate the complete settings document;
-2. copy shared variables/functions;
-3. overlay project definitions by exact name;
-4. reject cross-kind and reserved-name collisions;
-5. validate target-shell function syntax;
-6. sort operations deterministically.
+2. resolve `project` (expand `~`/`$HOME`, clean to an absolute path — fails the switch if empty,
+   relative, or otherwise unresolved);
+3. copy shared and project variables, substituting `$_PROJECT`/`${_PROJECT}` references into their
+   values, then set `_PROJECT` itself to the resolved path, overwriting any declared value;
+4. copy shared and project functions;
+5. reject cross-kind and reserved-name collisions;
+6. validate target-shell function syntax;
+7. sort operations deterministically.
 
 ## Shell Session State
 
@@ -143,9 +170,11 @@ shell-cmd hooks. There is no directory-change step (`project` is informational o
 snapshot/rollback: this is a plain sequential script, not a transaction. If one statement fails
 (e.g. a shell `readonly` conflict on one variable), the shell reports its own error for that
 statement and every other statement in the file still runs — a partial application is possible.
-The installed shell function sources this file unconditionally after every invocation; because it
-is only ever rewritten when resolution fully succeeds, sourcing a stale copy after a failed switch
-reproduces the unchanged prior state rather than a half-written one.
+The installed shell function clears this file before every invocation and sources it afterward
+only if the invocation just rewrote it — which only a bare invocation, a project name, or
+`--select` ever do. A failed switch attempt, or any other command, leaves nothing to source, so
+the shell is left exactly as it was rather than reactivated with a half-written or stale-but-once-
+successful state.
 
 ## Installation Record and Backup
 

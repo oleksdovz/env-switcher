@@ -13,8 +13,13 @@ func TestResolveOverridesSharedByExactName(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(e.Variables) != 3 || e.Variables[0].Name != "A" || e.Variables[0].Value != "project" {
+	// Sorted (ASCII): A, B, OLD, _PROJECT — uppercase letters sort before '_'.
+	if len(e.Variables) != 4 || e.Variables[0].Name != "A" || e.Variables[0].Value != "project" {
 		t.Fatalf("unexpected variables: %#v", e.Variables)
+	}
+	last := e.Variables[len(e.Variables)-1]
+	if last.Name != "_PROJECT" || last.Value != dir {
+		t.Fatalf("_PROJECT not resolved to the project directory: %#v", last)
 	}
 }
 
@@ -44,7 +49,7 @@ func TestResolveDoesNotRequireProjectDirectoryToExist(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve failed for a nonexistent project directory: %v", err)
 	}
-	if len(e.Variables) != 1 {
+	if len(e.Variables) != 2 {
 		t.Fatalf("unexpected variables: %#v", e.Variables)
 	}
 }

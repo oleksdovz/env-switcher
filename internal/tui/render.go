@@ -7,15 +7,14 @@ import "strings"
 const boxMinWidth = 44
 
 const (
-	ansiReverse = "\x1b[7m"
-	ansiBold    = "\x1b[1m"
-	ansiReset   = "\x1b[0m"
+	ansiBold  = "\x1b[1m"
+	ansiReset = "\x1b[0m"
 )
 
-// render dispatches to the current mode's view. Every mode shares the same dialog/whiptail-style
-// look: a single bordered box, title centered in the top edge, a divider before the button row
-// at the bottom of the same box (not a separate line below it), and a reverse-video highlight on
-// the focused row instead of a plain marker character.
+// render dispatches to the current mode's view. The confirmation dialogs (trust/view/install
+// warnings) share a dialog/whiptail-style look: a single bordered box, title centered in the top
+// edge, and a divider before the button row at the bottom of the same box. Environment selection
+// itself (the default case) is rendered by the embedded huh.Form instead — see renderSelect.
 func (m Model) render() string {
 	switch m.mode {
 	case "trust":
@@ -29,48 +28,32 @@ func (m Model) render() string {
 		}, "Show complete unmasked file? [y/N]", m.boxWidth())
 	case "install-warning":
 		return drawDialog("Confirm", nil, "Install or update shell integration? [y/N]", m.boxWidth())
+	case "upgrade-warning":
+		return drawDialog("Confirm", []string{
+			"Downloads and verifies the latest compatible release,",
+			"then replaces the installed env-switcher binary.",
+		}, "Upgrade env-switcher now? [y/N]", m.boxWidth())
 	case "view":
 		// Raw file content, deliberately not boxed — it's arbitrary-width user data, not a
 		// short fixed message, and boxing it would mean either wrapping or truncating lines
 		// the user is specifically trying to inspect.
 		return m.fullFile + "\nPress n or Esc to return.\n"
 	default:
-		return m.renderList()
+		return m.renderSelect()
 	}
 }
 
-func (m Model) renderList() string {
-	const reservedRows = 6 // top/bottom border, divider, button row, one spare line of slack
-	var rows []boxRow
-	start, end := 0, len(m.Projects)
-	if m.Height > 0 {
-		visible := m.Height - reservedRows
-		if visible < 1 {
-			visible = 1
-		}
-		if end > visible {
-			start = m.Focus - visible + 1
-			if start < 0 {
-				start = 0
-			}
-			end = start + visible
-			if end > len(m.Projects) {
-				end = len(m.Projects)
-			}
-		}
-	}
-	for i := start; i < end; i++ {
-		rows = append(rows, boxRow{text: "  " + m.Projects[i], highlight: i == m.Focus})
-	}
-	if end < len(m.Projects) {
-		rows = append(rows, boxRow{text: "  …"})
-	}
-	if len(m.Projects) == 0 {
-		rows = append(rows, boxRow{text: "No configured projects."})
-	}
-	buttons := "F2/v View  F3/e Edit  F4/r Reload  F5/i Install  F10/q Exit"
+// shortcutHelp is the application-level key hint row. huh's own help line (shown beneath the
+// select field) documents navigation — up/down/enter — since that's the form's concern; this
+// documents the outer model's shortcuts, which huh has no way to know about.
+const shortcutHelp = "F2/v View  F3/e Edit  F4/r Reload  F5/i Install  F6 Upgrade  F10/q Exit"
+
+func (m Model) renderSelect() string {
 	var b strings.Builder
-	b.WriteString(drawBox("env-switcher", rows, buttons, m.boxWidth()))
+	b.WriteString(m.form.View())
+	b.WriteString("\n")
+	b.WriteString(shortcutHelp)
+	b.WriteString("\n")
 	if m.Status != "" {
 		b.WriteString(m.Status + "\n")
 	}
@@ -82,12 +65,11 @@ func (m Model) renderList() string {
 func (m Model) boxWidth() int { return m.Width }
 
 type boxRow struct {
-	text      string
-	highlight bool
+	text string
 }
 
-// drawDialog is drawBox for the common case of plain (non-highlighted) message lines plus a
-// single button-row line, e.g. a [y/N] confirmation.
+// drawDialog is drawBox for the common case of plain message lines plus a single button-row
+// line, e.g. a [y/N] confirmation.
 func drawDialog(title string, message []string, buttons string, maxWidth int) string {
 	rows := make([]boxRow, len(message))
 	for i, l := range message {
@@ -97,10 +79,10 @@ func drawDialog(title string, message []string, buttons string, maxWidth int) st
 }
 
 // drawBox renders a dialog/whiptail-style panel: a bordered box with the title centered in the
-// top edge, the given rows (any marked highlight rendered in reverse video), a divider, and a
-// button/key-hint row — all inside the same box. It does not wrap long lines — callers keep each
-// line short enough to read as one row — but does truncate to fit when maxWidth constrains it
-// below what the content would otherwise need.
+// top edge, the given message rows, a divider, and a button/key-hint row — all inside the same
+// box. It does not wrap long lines — callers keep each line short enough to read as one row —
+// but does truncate to fit when maxWidth constrains it below what the content would otherwise
+// need.
 func drawBox(title string, rows []boxRow, buttons string, maxWidth int) string {
 	width := boxMinWidth
 	if w := len([]rune(title)) + 4; w > width {
@@ -130,12 +112,12 @@ func drawBox(title string, rows []boxRow, buttons string, maxWidth int) string {
 	b.WriteString(boxTopBorder(title, width))
 	b.WriteString("\n")
 	for _, r := range rows {
-		b.WriteString(boxLine(r.text, width, r.highlight))
+		b.WriteString(boxLine(r.text, width))
 		b.WriteString("\n")
 	}
 	b.WriteString(boxDivider(width))
 	b.WriteString("\n")
-	b.WriteString(boxLine(buttons, width, false))
+	b.WriteString(boxLine(buttons, width))
 	b.WriteString("\n")
 	b.WriteString(boxBottomBorder(width))
 	b.WriteString("\n")
@@ -162,7 +144,7 @@ func boxBottomBorder(width int) string {
 	return "└" + strings.Repeat("─", width-2) + "┘"
 }
 
-func boxLine(s string, width int, highlight bool) string {
+func boxLine(s string, width int) string {
 	inner := width - 4 // "│ " + text + " │"
 	if inner < 0 {
 		inner = 0
@@ -173,8 +155,5 @@ func boxLine(s string, width int, highlight bool) string {
 	}
 	pad := inner - len(runes)
 	text := string(runes) + strings.Repeat(" ", pad)
-	if highlight {
-		text = ansiReverse + text + ansiReset
-	}
 	return "│ " + text + " │"
 }

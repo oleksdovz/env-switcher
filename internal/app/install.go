@@ -7,8 +7,34 @@ import (
 	"os"
 	"strings"
 
+	"github.com/dolf/env-switcher/internal/config"
 	installer "github.com/dolf/env-switcher/internal/install"
 )
+
+// migrateLegacyExecutable removes an executable left over at the pre-bin/ install location
+// (~/.env-switcher/env-switcher, before the bin/ subdirectory convention) once the canonical
+// bin/env-switcher copy is confirmed in place. Best-effort and non-fatal, matching the rest of
+// this file's self-install conveniences: a stale leftover file is litter, never a reason to fail
+// an otherwise-successful install.
+func migrateLegacyExecutable(stdout, stderr io.Writer) {
+	dataDir, err := config.DataDir()
+	if err != nil {
+		return
+	}
+	removed, err := installer.MigrateLegacyExecutable(dataDir)
+	if err != nil {
+		_, _ = fmt.Fprintln(stderr, "note:", err)
+		return
+	}
+	if removed {
+		canonical, err := config.ExecutablePath()
+		if err != nil {
+			canonical = "~/.env-switcher/bin/env-switcher"
+		}
+		_, _ = fmt.Fprintf(stdout, "removed superseded executable at %s (now installed at %s)\n",
+			installer.LegacyExecutablePath(dataDir), canonical)
+	}
+}
 
 func installCommand(action string, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	shellName, profile, yes, err := installArgs(args)
@@ -45,6 +71,7 @@ func installCommand(action string, args []string, stdin io.Reader, stdout, stder
 		} else {
 			_, _ = fmt.Fprintln(stdout, "integration is already up to date")
 		}
+		migrateLegacyExecutable(stdout, stderr)
 	case "rollback":
 		if err := installer.Rollback(target); err != nil {
 			return err

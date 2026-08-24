@@ -5,9 +5,31 @@ directory. Schema version 1 supports shared and per-project variables and shell 
 definitions override shared definitions with the same name.
 
 Use the starter file as the canonical example. Values are literal: env-switcher performs no shell,
-command, glob, variable, or tilde expansion in values. `project` is required but purely
-informational (shown by `list`/`get`) — switching never changes the shell's directory or checks
-that the path exists, so it may begin with `~/` or point anywhere at all.
+command, or glob expansion in values, and no arbitrary variable expansion — with two narrow,
+specific exceptions, both handled in Go, never by invoking a shell or `eval`:
+
+- `project` supports a leading `~`/`~/` and any `$HOME`/`${HOME}` reference, expanded to the
+  current user's home directory. It's still shown as configured (unexpanded) by `list`/`get`, but
+  for switching it must resolve to a clean **absolute** path — an empty, relative, or otherwise
+  unresolved `project` fails the switch. Its resolved value is what populates `_PROJECT` (below);
+  switching still never `cd`s to it, and it still doesn't need to exist.
+- Every other `env-vars` value (shared and project-specific) may reference `$_PROJECT` or
+  `${_PROJECT}`, which is substituted with that resolved absolute path. No other variable is
+  expanded this way, and this substitution never touches `$(...)`, backticks, or any other shell
+  syntax — a value containing those stays exactly as literal as it always has.
+
+### `_PROJECT`
+
+`_PROJECT` is a reserved, application-managed variable: env-switcher sets it automatically to the
+environment's resolved `project` directory on every switch. Do not declare it yourself under
+`env-vars` — settings written before this existed (or that still declare it as a manual
+workaround) keep loading, but any declared value is always overwritten by the computed one, never
+used. It's available to:
+
+- other `env-vars` values, via `$_PROJECT`/`${_PROJECT}` substitution (see above);
+- shared and project-specific `shell-functions`, as an ordinary exported shell variable — quote it
+  when using it in a command, e.g. `cd "$_PROJECT"`;
+- shared and project-specific `shell-cmd`, the same way.
 
 YAML anchors (`&name`), aliases (`*name`), and merge keys (`<<: *name`) are supported — the starter
 file uses them to share a common `env-vars`/`shell-functions` block across projects, with individual

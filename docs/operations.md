@@ -43,7 +43,27 @@ env-switcher install --shell bash
 Installation copies the executable to `~/.env-switcher/bin/env-switcher` and atomically reconciles
 one managed `env-switcher` shell function in `.zshrc` or `.bashrc`. Existing profiles are backed up
 under `~/.env-switcher/backups/`. Symlink profiles and malformed markers fail closed. Running
-`install` again after upgrading the binary re-syncs the managed block to the latest wrapper.
+`install` again after upgrading the binary re-syncs the managed block to the latest wrapper. If an
+executable from before the `bin/` convention existed (`~/.env-switcher/env-switcher`), it's removed
+once the canonical `bin/env-switcher` copy is confirmed in place — never before, and never if it's
+a symlink or owned by a different user.
+
+## Upgrade
+
+```bash
+env-switcher upgrade
+# or
+env-switcher --upgrade
+```
+
+Checks the latest **stable** (non-draft, non-prerelease) release of
+[oleksdovz/env-switcher](https://github.com/oleksdovz/env-switcher) by semantic-version comparison
+against the running build, downloads the asset matching the running `GOOS`/`GOARCH`, verifies it
+against the release's `SHA256SUMS`, and atomically replaces `~/.env-switcher/bin/env-switcher`. A
+release with no published checksum, an unmatched checksum, or no asset for the running platform
+fails the upgrade without touching the existing installation; an already-current installation
+reports that and installs nothing. `F6` in the terminal interface (after a confirmation prompt)
+runs the identical check — never a separate implementation.
 
 ## Rollback and uninstall
 
@@ -62,5 +82,9 @@ reported filesystem condition.
 ## Switching
 
 `env-switcher <project>` (bare or via `--select`) and the TUI both resolve the effective
-environment and write it to `~/.env-switcher/current-env` (`0600`); the installed shell function
-then `source`s that file. See [security](security.md) for the failure-handling contract.
+environment and write it to `~/.env-switcher/current-env` (`0600`) — the only three actions that
+ever do. The installed shell function clears that file *before* every invocation and `source`s it
+afterward only if the invocation just rewrote it, so any other command (`--help`, `list`, `get`,
+`version`, `validate`, `reload`, `view`, `edit`, `install`, `upgrade`, `rollback`, `uninstall`) —
+and a failed switch attempt — never reactivates whatever an earlier, unrelated successful switch
+left behind. See [security](security.md) for the failure-handling contract.

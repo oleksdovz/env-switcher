@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -9,9 +10,10 @@ import (
 	"github.com/dolf/env-switcher/internal/config"
 	installer "github.com/dolf/env-switcher/internal/install"
 	tuit "github.com/dolf/env-switcher/internal/tui"
+	"github.com/dolf/env-switcher/internal/upgrade"
 )
 
-func tuiCommand(stdin io.Reader, stdout, stderr io.Writer) error {
+func tuiCommand(ctx context.Context, currentVersion string, stdin io.Reader, stdout, stderr io.Writer) error {
 	path, _, err := config.Bootstrap()
 	if err != nil {
 		return err
@@ -20,6 +22,9 @@ func tuiCommand(stdin io.Reader, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	// The same Upgrader instance upgradeCommand uses for "upgrade"/"--upgrade": F6 must not
+	// duplicate that logic, only trigger it.
+	upgrader := newUpgrader()
 	services := tuit.Services{Reload: func() (*config.Settings, error) { return reloadSettings(path, settings) }, Install: func() error {
 		shellName := detectShell()
 		target, err := installer.Resolve(shellName, "")
@@ -32,6 +37,8 @@ func tuiCommand(stdin io.Reader, stdout, stderr io.Writer) error {
 		}
 		_, err = installer.Install(target, exe)
 		return err
+	}, Upgrade: func() (upgrade.Result, error) {
+		return upgrader.Upgrade(ctx, currentVersion)
 	}}
 	model := tuit.New(settings, path, services)
 	// Nothing captures stdout via command substitution anymore (the wrapper just runs the

@@ -69,14 +69,17 @@ In temporary homes, create representative `.bashrc`/`.zshrc`, then run confirmed
 
 Expected:
 
-- executable exists at `~/.env-switcher/env-switcher` and is executable;
+- executable exists at `~/.env-switcher/bin/env-switcher` and is executable;
 - exactly one managed block exists and second install leaves profile bytes unchanged;
 - unrelated content and mode remain;
 - backups/metadata are user-only;
 - real profiles remain untouched.
 
 Test malformed markers, read-only parents, symlinks, interrupted writes, and concurrent installation;
-all fail according to [installation.md](contracts/installation.md).
+all fail according to [installation.md](contracts/installation.md). Seed an executable at the
+pre-`bin/`-convention path (`~/.env-switcher/env-switcher`) before installing; after install
+confirms the canonical `bin/env-switcher` copy is in place, the legacy file is removed — but only
+then, and never if it's a symlink or owned by a different user.
 
 ## 7. Rollback and Uninstall
 
@@ -85,9 +88,17 @@ and confirm only the managed block and approved executable are removed; settings
 
 ## 8. TUI Acceptance
 
-In PTY tests validate navigation, confirmation, F2/F3/F4/F5/F10, alternatives, editor suspend/resume,
-invalid reload retention, small-terminal behavior, cancellation, and redaction. Exit actions emit no
-payload for unconfirmed selection.
+In PTY tests validate navigation, confirmation, F2/F3/F4/F5/F6/F10, alternatives, editor
+suspend/resume, invalid reload retention, small-terminal behavior, cancellation, and redaction.
+Exit actions emit no payload for unconfirmed selection.
+
+Verify, in both Bash and Zsh through the real installed wrapper: switch to a project whose
+`shell-cmd` appends a marker to a log file, then run a non-switch command (`--help` is enough) in
+the same shell session, and confirm the log gains no second entry, the previously exported
+variables are unchanged, and the non-switch command's own output appears exactly once with no
+"activated" line. Repeat for a *failed* switch attempt (an unknown project name): the shell must
+be left exactly as it was, not reactivated with whatever an earlier, unrelated successful switch
+left behind.
 
 Verify F2 warns before deliberately showing the complete unmasked file, cancellation shows no file
 content, and F3 is user-directed editing. Verify first-run and changed-function warnings and prove
@@ -107,7 +118,29 @@ Run the maximum-scale reload fixture (100 projects, 100 variables, and 100 funct
 on both Linux and macOS CI. Fail the job if the measured reload exceeds 2 seconds, and retain only
 the timing/status report—not settings content—as CI evidence.
 
-## 9. Release Matrix
+## 9. Upgrade Verification
+
+Never point these tests at live GitHub — serve fixture release metadata, an asset archive, and a
+checksum file from a local `httptest.Server` (or equivalent) instead.
+
+Expected, via both `env-switcher upgrade`/`--upgrade` and F6 in the terminal interface (driving
+the identical underlying call — assert both reach it, not two separate implementations):
+
+- a newer stable release is downloaded, verified, and installed atomically at
+  `~/.env-switcher/bin/env-switcher`; the old version, new version, and installed path are
+  reported;
+- an already-current installation reports that clearly and installs nothing;
+- a draft or a prerelease release, even with a higher version number, is never selected;
+- a release with no published checksum file, or a checksum that doesn't match the downloaded
+  asset, fails the upgrade and leaves the previously installed executable byte-for-byte unchanged;
+- a release with no asset for the running OS/architecture fails with an actionable error naming
+  the platform sought and the platforms actually published;
+- an archive containing an absolute path, a `..` traversal entry, a symlink, or any entry besides
+  the single expected executable is rejected without extracting anything;
+- a project configured with the name `upgrade` fails validation, matching the other reserved
+  command words.
+
+## 10. Release Matrix
 
 Build and smoke-test:
 

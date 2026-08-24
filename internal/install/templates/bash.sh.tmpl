@@ -1,8 +1,14 @@
 #env-switcher
 env-switcher() {
-  local __env_switcher_status
+  local __env_switcher_status __env_switcher_payload="$HOME/.env-switcher/current-env"
+  # Clear any payload left by a previous switch before running: current-env is only ever
+  # (re)written by an actual switch (bare invocation, a project name, or --select), so its
+  # presence afterward is the signal that *this* run produced one, not just proof that some
+  # earlier run once did. Without this, every command — including --help, list, upgrade, ... —
+  # would re-source and reactivate the last switch, which is the bug this clear-first step fixes.
+  rm -f "$__env_switcher_payload"
   __ENV_SWITCHER_TARGET_SHELL=bash "$HOME/.env-switcher/bin/env-switcher" "$@"
   __env_switcher_status=$?
-  [ -f "$HOME/.env-switcher/current-env" ] && source "$HOME/.env-switcher/current-env"
+  [ -f "$__env_switcher_payload" ] && source "$__env_switcher_payload"
   return $__env_switcher_status
 }
