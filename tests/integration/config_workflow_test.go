@@ -3,12 +3,15 @@ package integration
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/dolf/env-switcher/internal/config"
 )
 
+// TestConfigurationOperationsNeverExecuteFunctions proves loading/validating settings never
+// executes a configured shell-function's body — that only ever happens after a project is
+// actually selected (see internal/shell.Render), no matter how many times the configuration
+// itself is parsed.
 func TestConfigurationOperationsNeverExecuteFunctions(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -30,23 +33,10 @@ envs:
 	if err := os.WriteFile(path, []byte(yaml), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	settings, err := config.Load(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	digest := config.FunctionDigest(settings)
-	if digest == "" {
-		t.Fatal("empty function digest")
-	}
-	if err := config.Acknowledge(digest); err != nil {
+	if _, err := config.Load(path); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(marker); !os.IsNotExist(err) {
 		t.Fatal("configured function executed during non-activation operation")
-	}
-	ackPath, _ := config.AcknowledgementPath()
-	b, _ := os.ReadFile(ackPath)
-	if strings.Contains(string(b), "touch") || strings.Contains(string(b), marker) {
-		t.Fatal("function body persisted in acknowledgement")
 	}
 }

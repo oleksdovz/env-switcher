@@ -26,11 +26,6 @@ func (m Model) render() string {
 		return ""
 	}
 	switch m.mode {
-	case "trust":
-		return drawDialog("Trust Warning", []string{
-			"Configured shell functions are trusted executable code.",
-			"They run only after environment selection.",
-		}, "Continue? [y/N]", m.boxWidth())
 	case "view-warning":
 		return drawDialog("Sensitive Data", []string{
 			"settings.yaml contains sensitive values.",

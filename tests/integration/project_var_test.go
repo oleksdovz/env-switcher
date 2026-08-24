@@ -58,9 +58,6 @@ func testProjectVarAvailable(t *testing.T, shellName string) {
 	if err != nil {
 		t.Fatalf("settings do not validate: %v", err)
 	}
-	if err := config.Acknowledge(config.FunctionDigest(set)); err != nil {
-		t.Fatal(err)
-	}
 	effective, err := environment.Resolve(set, "dev", shellName)
 	if err != nil {
 		t.Fatal(err)

@@ -70,9 +70,10 @@ TUI warns that it contains sensitive values and requires continuation. Cancellat
 The displayed content is never copied into logs, errors, diagnostics, crash reports, or integration
 diagnostics. User-directed F3 editing is the second intentional local disclosure path.
 
-On first run and whenever the deterministic shell-function digest changes, the TUI warns that
-configured functions are trusted executable user code. F2, F3, validation, and reload may read or
-compare function bodies but never execute them; execution is permitted only after project selection.
+Configured shell-functions and shell-cmd hooks are trusted executable user code with no separate
+confirmation step — configuring one is itself the trust decision. F2, F3, validation, and reload may
+read or compare function bodies but never execute them; execution happens only as part of an actual
+project selection.
 
 F4 replaces the model only with a fully valid candidate. On failure, prior list/focus remains. If a
 focused project disappears after success, focus moves to the first sorted project without activation.

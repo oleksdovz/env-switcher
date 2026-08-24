@@ -113,6 +113,14 @@ supports Bash and Zsh, and installs shell integration for applying the selected 
   (at the very start if the profile has 5 or fewer lines), so a user's own trailing lines — a
   final tool's `eval "$(... init)"`, a prompt theme finalization — keep running after this block,
   not before it. Reconciling an existing block still never moves it.
+- Q: The trusted-function warning (TUI dialog on first run/after a change, plus the CLI's inline
+  y/n confirmation) kept resurfacing and was reported as friction across multiple sessions —
+  should env-switcher keep a confirmation step before running configured shell-functions/shell-cmd
+  at all? → A: No, remove it entirely, deliberately reversing FR-028/FR-050. Configuring a
+  shell-function or shell-cmd is itself the trust decision, the same as configuring any other
+  value — there is no separate warning, dialog, or acknowledgment step anywhere (TUI or CLI), and
+  nothing is persisted to record one having happened. Execution still only ever happens as part of
+  an actual environment selection, never during load/validate/view/edit/reload.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -192,11 +200,8 @@ validation.
 6. **Given** no default editor can be resolved, **When** the user invokes `F3`, **Then** the file is
    unchanged and the user receives instructions for configuring an editor.
 7. **Given** settings contain shell functions, **When** the user views, edits, validates, or reloads
-   settings, **Then** no configured function body is executed.
-8. **Given** shell functions exist on first run or their definitions have changed, **When** settings
-   are loaded, **Then** the user is warned that selecting an environment executes trusted local code.
-9. **Given** the user has acknowledged the current trusted-function warning, **When** unchanged
-   function definitions are loaded in a later run, **Then** no repeated warning is required.
+   settings, **Then** no configured function body is executed — configuring a function is itself
+   the trust decision, so no separate warning or confirmation exists at any point.
 
 ---
 
@@ -435,10 +440,11 @@ failed download each leave the previously installed executable untouched.
   encoding, and syntax for the active shell MUST be validated without claiming semantic safety. A
   function or `shell-cmd` body has no separate per-shell form; the same body is offered to and
   checked against whichever shell is active.
-- **FR-028**: The product MUST warn about trusted code execution (shell functions or `shell-cmd`) on
-  first run and after any such definition changes. Bodies MUST NOT execute during F2 view, F3 edit,
-  validation, or reload; they may execute only after explicit environment selection. Warning
-  acknowledgement MUST persist across runs without storing bodies or secret values.
+- **FR-028**: Configuring a shell function or `shell-cmd` is itself the trust decision; the product
+  MUST NOT show a separate warning or require a separate confirmation before it can run (reversing
+  the original first-run/changed-function warning — see the 2026-08-24 session note above). Bodies
+  MUST NOT execute during F2 view, F3 edit, validation, or reload; they may execute only as part of
+  an actual environment selection.
 - **FR-033**: A project's `shell-cmd`, if configured, MUST run after the shared `shell-cmd` (if
   configured) as the last step of a successful switch — additive, not an override — and its exit
   status MUST NOT roll back a switch that has already committed.

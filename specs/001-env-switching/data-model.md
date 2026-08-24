@@ -112,16 +112,15 @@ emitted. Syntax validity does not imply safety.
 Unlike a named function, `shell-cmd` has no identifier. On a successful switch, the shared
 `shell-cmd` (if set) runs first, then the project's own (if set) — both, never one replacing the
 other — as the last statements after functions are defined and variables exported. It is exactly
-as trusted as a named function and is included in the first-run/changed-function digest and
-warning.
+as trusted as a named function: configuring it is itself the trust decision, with no separate
+warning or confirmation step.
 
 ## Effective Environment
 
 Immutable derived data containing selected name, sorted effective variables (`_PROJECT` always
 among them — see Reserved Project Variable), sorted effective functions, ordered shell-cmd hooks,
-target shell, and deterministic configuration digest. There is no separate directory field —
-switching does not `cd` — but the resolved `project` path is carried as the `_PROJECT` variable
-like any other.
+and target shell. There is no separate directory field — switching does not `cd` — but the resolved
+`project` path is carried as the `_PROJECT` variable like any other.
 
 Derivation order:
 
@@ -140,19 +139,14 @@ Derivation order:
 | Field | Type | Persistence | Rules |
 |-------|------|-------------|-------|
 | active project | string | current shell only, exported | Empty before first successful switch |
-| acknowledged function digest | string | user-only metadata file | Records the last warned trusted-code set across runs |
 
 The active-project name uses a reserved prefix. There is no tracked list of previously managed
 variable/function names: switching does not remove anything a prior switch (or anything else) set,
 it only ever applies the newly selected project's own variables/functions/shell-cmd.
 
-The settings model includes a deterministic digest of all function names, target-shell variants,
-and bodies. Missing acknowledgement on first run or a changed digest triggers a trusted-code warning;
-calculating or comparing the digest never executes a body. Persisted acknowledgement contains only
-the digest and schema version, uses `0600` permissions under the `0700` data directory, verifies
-current-user ownership, and is updated by same-directory temporary file, `fsync`, and atomic rename
-only after consent. Missing, malformed, unsafe-permission, or mismatched metadata is treated as not
-acknowledged and never suppresses the required warning.
+There is no trust-warning or acknowledgment state at all: configuring a shell-function or
+`shell-cmd` is itself the trust decision, the same as configuring any other value, so nothing is
+computed or persisted to record consent — see FR-028.
 
 ```text
 Uninitialized --successful activation--> Active(project A)

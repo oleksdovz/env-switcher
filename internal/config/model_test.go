@@ -93,15 +93,10 @@ func TestVariableNamesStillRejectShellSafeSeparators(t *testing.T) {
 	}
 }
 
-func TestFunctionDigestIsDeterministic(t *testing.T) {
-	body := "echo ok"
-	a := &Settings{Version: 1, Envs: map[string]ProjectEnvironment{"dev": {Project: "/tmp", ShellFunctions: map[string]string{"f": body}}}}
-	if FunctionDigest(a) != FunctionDigest(a) {
-		t.Fatal("digest is not deterministic")
-	}
-}
-
-func TestShellCmdValidatedLikeAFunctionAndCoveredByTrust(t *testing.T) {
+// TestShellCmdValidatedLikeAFunction proves shell-cmd's body gets the same validation a named
+// shell-function's body does (non-empty, size/NUL/UTF-8 checks) — it's exactly as much trusted
+// executable code, just anonymous and hookless rather than named and callable on demand.
+func TestShellCmdValidatedLikeAFunction(t *testing.T) {
 	empty := ""
 	invalid := &Settings{Version: 1, Envs: map[string]ProjectEnvironment{"dev": {Project: "/tmp", ShellCmd: &empty}}}
 	if err := Validate(invalid); err == nil {
@@ -109,25 +104,9 @@ func TestShellCmdValidatedLikeAFunctionAndCoveredByTrust(t *testing.T) {
 	}
 
 	body := "echo hook"
-	without := &Settings{Version: 1, Envs: map[string]ProjectEnvironment{"dev": {Project: "/tmp"}}}
 	with := &Settings{Version: 1, Envs: map[string]ProjectEnvironment{"dev": {Project: "/tmp", ShellCmd: &body}}}
 	if err := Validate(with); err != nil {
 		t.Fatalf("valid shell-cmd rejected: %v", err)
-	}
-	if HasFunctions(without) {
-		t.Fatal("HasFunctions true with no shell-cmd or shell-functions")
-	}
-	if !HasFunctions(with) {
-		t.Fatal("HasFunctions false with a shell-cmd present")
-	}
-	if FunctionDigest(without) == FunctionDigest(with) {
-		t.Fatal("digest unchanged after adding a shell-cmd")
-	}
-
-	sharedBody := "echo shared"
-	shared := &Settings{Version: 1, Shared: Environment{ShellCmd: &sharedBody}, Envs: map[string]ProjectEnvironment{"dev": {Project: "/tmp"}}}
-	if !HasFunctions(shared) {
-		t.Fatal("HasFunctions false with a shared shell-cmd present")
 	}
 }
 

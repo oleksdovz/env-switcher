@@ -1,7 +1,6 @@
 package app
 
 import (
-	"bufio"
 	"fmt"
 	"io"
 	"sort"
@@ -25,7 +24,7 @@ import (
 // nothing to source, not "re-apply the last successful switch": once a switch has failed, the
 // values already live in the current shell (from whenever, if ever, it last switched
 // successfully) are left alone rather than redundantly reapplied.
-func switchCommand(shellName, project string, stdin io.Reader, stdout, stderr io.Writer) error {
+func switchCommand(shellName, project string, stdout io.Writer) error {
 	if shellName != "bash" && shellName != "zsh" {
 		return &Error{Outcome: OutcomeCompatibility, Op: "switch", Message: "supported shells are bash and zsh"}
 	}
@@ -42,11 +41,6 @@ func switchCommand(shellName, project string, stdin io.Reader, stdout, stderr io
 	}
 	if _, ok := settings.Envs[project]; !ok {
 		return unconfiguredProjectError(settings, project)
-	}
-	if config.HasFunctions(settings) && !config.IsAcknowledged(config.FunctionDigest(settings)) {
-		if err := confirmTrustedFunctions(stdin, stderr, settings); err != nil {
-			return err
-		}
 	}
 	effective, err := environment.Resolve(settings, project, shellName)
 	if err != nil {
@@ -75,37 +69,6 @@ func switchCommand(shellName, project string, stdin io.Reader, stdout, stderr io
 		return &Error{Outcome: OutcomeOperation, Op: "switch", Message: err.Error()}
 	}
 	_, _ = fmt.Fprintf(stdout, "switched to %s\n", project)
-	return nil
-}
-
-// confirmTrustedFunctions is the plain-CLI counterpart of the TUI's own trust dialog. Before this,
-// `env-switcher <project>` hard-refused outright the first time (or any time after) a trusted
-// shell-functions/shell-cmd body changed, forcing a detour through the TUI just to press `y` once
-// — real friction for anyone who only ever uses the CLI form. This prompts right here instead
-// (stderr, matching how install/upgrade already confirm inline) and, on "y", persists the
-// acknowledgment via config.Acknowledge so the same content never asks again from either the CLI
-// or the TUI — exactly one confirmation per actual function change, not one per session.
-//
-// stdin == nil (the TUI's call into switchCommand, after a form selection) means there is no safe
-// way to block on a read here — Bubble Tea owns the terminal in raw mode at that point. The TUI
-// instead gates entry with its own dialog before a selection can ever reach this far, so it keeps
-// the old hard refusal as a redundant safety net, not a first line of defense.
-func confirmTrustedFunctions(stdin io.Reader, stderr io.Writer, settings *config.Settings) error {
-	digest := config.FunctionDigest(settings)
-	if stdin == nil {
-		return &Error{Outcome: OutcomeSecurity, Op: "switch", Message: "trusted shell functions changed; open env-switcher and acknowledge the warning"}
-	}
-	_, _ = fmt.Fprintln(stderr, "⚠ trusted shell functions or shell-cmd changed since you last confirmed them.")
-	_, _ = fmt.Fprintln(stderr, "  Review with `env-switcher get <project>` or `env-switcher edit` first if unsure.")
-	_, _ = fmt.Fprint(stderr, "Trust and run them? [y/N] ")
-	line, _ := bufio.NewReader(stdin).ReadString('\n')
-	if strings.ToLower(strings.TrimSpace(line)) != "y" {
-		return &Error{Outcome: OutcomeCancelled, Op: "switch", Message: "cancelled: trusted shell functions were not acknowledged"}
-	}
-	if err := config.Acknowledge(digest); err != nil {
-		return &Error{Outcome: OutcomeOperation, Op: "switch", Message: err.Error()}
-	}
-	_, _ = fmt.Fprintln(stderr, "✓ trusted function warning acknowledged")
 	return nil
 }
 

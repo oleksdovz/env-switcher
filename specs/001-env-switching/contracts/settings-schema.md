@@ -120,10 +120,9 @@ include both the merged `k_load` and its own `k_ns`; its `shell-cmd` runs after 
   execution.
 - Project definitions override same-kind shared `env-vars`/`shell-functions` by exact name.
 
-The product warns on first run and whenever a deterministic digest of configured shell functions
-changes. Viewing, editing, validating, reloading, or hashing the file never executes a function;
-function definitions are applied only after explicit environment selection. Acknowledgement persists
-as user-only metadata containing a schema version and digest, never bodies or secret values.
+Configuring a shell-function or shell-cmd is itself the trust decision — there is no separate
+confirmation step. Viewing, editing, validating, or reloading the file never executes a function;
+function definitions are applied only after explicit environment selection.
 
 Success yields one immutable Settings model. Failure yields source-located, redacted errors on
 stderr and produces no partial model or payload. Versions other than `1` fail with compatibility

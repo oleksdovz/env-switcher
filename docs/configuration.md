@@ -46,9 +46,10 @@ whichever shell is active — there's no separate `bash`/`zsh` form; a function 
 differently per shell branches on something like `$ZSH_VERSION` at runtime. `shell-cmd` is the same
 kind of trusted code but anonymous: an unnamed hook that runs as the last step of every switch. If
 both `shared` and a project define one, the shared hook runs first, then the project's own — neither
-replaces the other. Bodies are syntax-checked but cannot be made semantically safe. A first-run or
-changed-function warning (covering shell-functions and shell-cmd alike) must be acknowledged before
-activation. Viewing, editing, validating, reloading, and digest calculation never execute them.
+replaces the other. Bodies are syntax-checked but cannot be made semantically safe. There is no
+separate confirmation step before they run — configuring one is itself the trust decision, the same
+as any other configured value. Viewing, editing, validating, and reloading never execute them; they
+only ever run as part of an actual environment selection.
 
 Project names cannot be `help`, `list`, `ls`, `edit`, `get`, `version`, `validate`, `install`,
 `rollback`, `uninstall`, `reload`, or `view` — those words are reserved CLI commands, and a project

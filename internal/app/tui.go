@@ -53,9 +53,5 @@ func tuiCommand(ctx context.Context, currentVersion string, stdin io.Reader, std
 	if selected == "" {
 		return nil
 	}
-	// stdin is nil here deliberately: the TUI's own trust dialog (see internal/tui/model.go) is
-	// what gates reaching a selection at all when acknowledgment is outstanding, so this call
-	// should never actually need to prompt — passing nil keeps confirmTrustedFunctions from ever
-	// trying to block-read the terminal Bubble Tea just released.
-	return switchCommand(detectShell(), selected, nil, stdout, stderr)
+	return switchCommand(detectShell(), selected, stdout)
 }

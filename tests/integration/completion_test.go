@@ -285,16 +285,8 @@ func TestZshCompletionSurvivesShellCmdReloadingCompinit(t *testing.T) {
 	if err := os.WriteFile(settingsPath, []byte(settings), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	// Acknowledge the shell-cmd's trust warning so the upcoming switch actually applies it,
-	// exactly as a real first-time user would via the TUI/CLI. config.Acknowledge resolves paths
-	// from $HOME, so this test process's own environment needs to match the PTY subprocess's.
-	t.Setenv("HOME", home)
-	set, err := config.Load(settingsPath)
-	if err != nil {
+	if _, err := config.Load(settingsPath); err != nil {
 		t.Fatalf("fixture settings do not validate: %v", err)
-	}
-	if err := config.Acknowledge(config.FunctionDigest(set)); err != nil {
-		t.Fatal(err)
 	}
 
 	writeRC(t, home, "zsh")

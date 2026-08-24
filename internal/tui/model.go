@@ -25,10 +25,10 @@ type Services struct {
 // events (view/edit/reload/install/quit) and the small set of yes/no confirmation dialogs those
 // can raise. See render.go for how the two are composed on screen.
 type Model struct {
-	Settings                             *config.Settings
-	Selected, Status                     string
-	Width, Height                        int
-	mode, settingsPath, digest, fullFile string
+	Settings                     *config.Settings
+	Selected, Status             string
+	Width, Height                int
+	mode, settingsPath, fullFile string
 	// quitting is set on every path that returns tea.Quit. Bubble Tea, in this inline
 	// (non-alt-screen) mode, renders whatever View() returns for the model at the moment Update
 	// decides to quit — that's the last frame left behind in the terminal's scrollback once the
@@ -53,18 +53,13 @@ type operationMsg struct {
 
 func New(settings *config.Settings, path string, services Services) Model {
 	field := newSelectField(settings, "")
-	m := Model{
+	return Model{
 		Settings:     settings,
 		settingsPath: path,
 		services:     services,
-		digest:       config.FunctionDigest(settings),
 		field:        field,
 		form:         newForm(field),
 	}
-	if !config.IsAcknowledged(m.digest) && config.HasFunctions(settings) {
-		m.mode = "trust"
-	}
-	return m
 }
 
 func (m Model) Init() tea.Cmd { return m.form.Init() }
@@ -123,7 +118,7 @@ func (m Model) handleShortcut(msg tea.KeyPressMsg) (Model, tea.Cmd, bool) {
 	return m, nil, false
 }
 
-// handleDialogKey handles the y/n (and quit) keys for the trust/view/install confirmation
+// handleDialogKey handles the y/n (and quit) keys for the view/install/upgrade confirmation
 // dialogs. It is unchanged from the pre-huh implementation: these are plain text prompts, not
 // something huh provides a field for, so they stay hand-rolled (see render.go).
 func (m Model) handleDialogKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
@@ -135,12 +130,6 @@ func (m Model) handleDialogKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	}
 	if a == "y" {
 		switch m.mode {
-		case "trust":
-			if err := config.Acknowledge(m.digest); err != nil {
-				m.Status = err.Error()
-			} else {
-				m.Status = "trusted function warning acknowledged"
-			}
 		case "view-warning":
 			b, err := os.ReadFile(m.settingsPath)
 			if err != nil {
@@ -194,12 +183,8 @@ func (m Model) handleOperation(msg operationMsg) (Model, tea.Cmd) {
 	if msg.kind == "reload" {
 		focused, _ := m.field.GetValue().(string)
 		m.Settings = msg.settings
-		m.digest = config.FunctionDigest(msg.settings)
 		m.field = newSelectField(msg.settings, focused)
 		cmd := m.setForm(newForm(m.field))
-		if config.HasFunctions(msg.settings) && !config.IsAcknowledged(m.digest) {
-			m.mode = "trust"
-		}
 		m.Status = "projects reloaded"
 		return m, cmd
 	}

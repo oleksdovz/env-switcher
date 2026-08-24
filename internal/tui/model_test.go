@@ -36,7 +36,7 @@ func TestTypicalRenderUnder100ms(t *testing.T) {
 	}
 }
 
-func TestReloadRetainsPreviousModelOnFailureAndWarnsOnChangedFunctions(t *testing.T) {
+func TestReloadRetainsPreviousModelOnFailureAndReplacesOnSuccess(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	old := &config.Settings{Version: 1, Envs: map[string]config.ProjectEnvironment{"old": {Project: "/tmp"}}}
 	m := New(old, "/tmp/settings", Services{Reload: func() (*config.Settings, error) { return nil, errors.New("invalid settings") }})
@@ -47,7 +47,7 @@ func TestReloadRetainsPreviousModelOnFailureAndWarnsOnChangedFunctions(t *testin
 	if _, ok := m.Settings.Envs["old"]; !ok || !strings.Contains(m.Status, "invalid") {
 		t.Fatal("failed reload replaced valid model")
 	}
-	body := "echo trusted"
+	body := "echo hi"
 	m.services.Reload = func() (*config.Settings, error) {
 		return &config.Settings{Version: 1, Envs: map[string]config.ProjectEnvironment{"new": {Project: "/tmp", ShellFunctions: map[string]string{"f": body}}}}, nil
 	}
@@ -55,8 +55,8 @@ func TestReloadRetainsPreviousModelOnFailureAndWarnsOnChangedFunctions(t *testin
 	m = next.(Model)
 	next, _ = m.Update(cmd())
 	m = next.(Model)
-	if _, ok := m.Settings.Envs["new"]; !ok || m.mode != "trust" {
-		t.Fatal("valid changed-function reload did not replace and warn")
+	if _, ok := m.Settings.Envs["new"]; !ok {
+		t.Fatal("valid reload did not replace the model")
 	}
 }
 

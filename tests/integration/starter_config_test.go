@@ -43,12 +43,8 @@ func TestStarterConfigSwitchesEndToEnd(t *testing.T) {
 	if err := os.WriteFile(settingsPath, starter, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	settings, err := config.Load(settingsPath)
-	if err != nil {
+	if _, err := config.Load(settingsPath); err != nil {
 		t.Fatalf("starter file does not validate: %v", err)
-	}
-	if err := config.Acknowledge(config.FunctionDigest(settings)); err != nil {
-		t.Fatal(err)
 	}
 
 	cmd := exec.Command(binary, "staging")

@@ -65,12 +65,8 @@ func testHelpDoesNotReactivateProject(t *testing.T, shellName string) {
 	if err := os.WriteFile(settingsPath, []byte(settings), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	loaded, err := config.Load(settingsPath)
-	if err != nil {
+	if _, err := config.Load(settingsPath); err != nil {
 		t.Fatalf("test settings do not validate: %v", err)
-	}
-	if err := config.Acknowledge(config.FunctionDigest(loaded)); err != nil {
-		t.Fatal(err)
 	}
 
 	wrapper, ok := installer.Wrapper(shellName)
