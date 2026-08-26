@@ -2,6 +2,7 @@ package environment
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -23,11 +24,12 @@ import (
 // switch; there is no separate removal step for it or anything else.
 //
 // Resolution order (see also shell.Render, which the resulting Effective feeds): 1) resolve
-// env.project, 2) define _PROJECT, 3) resolve shared and project env-vars — substituting
-// $_PROJECT/${_PROJECT} references into their values — 4) collect shell functions, 5) collect
-// shell-cmd hooks. Functions/shell-cmd bodies are not text-substituted: they see _PROJECT as an
-// ordinary exported shell variable, since the rendered script always exports variables (_PROJECT
-// included) before running shell-cmd, and a function body only ever runs later, when called.
+// env.project, 2) define _PROJECT, 3) merge shared and project env-vars (project overrides
+// shared, same key wins) and resolve $NAME/${NAME} references within and across them — see
+// resolveVarRefs — 4) collect shell functions, 5) collect shell-cmd hooks. Functions/shell-cmd
+// bodies are not text-substituted: they see _PROJECT (and every other resolved env-var) as an
+// ordinary exported shell variable, since the rendered script always exports variables before
+// running shell-cmd, and a function body only ever runs later, when called.
 func Resolve(settings *config.Settings, projectName, shell string) (*Effective, error) {
 	project, ok := settings.Envs[projectName]
 	if !ok {
@@ -40,13 +42,21 @@ func Resolve(settings *config.Settings, projectName, shell string) (*Effective, 
 	if err != nil {
 		return nil, fmt.Errorf("envs.%s.project: %w", projectName, err)
 	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("resolve home: %w", err)
+	}
 
-	vars := make(map[string]string, len(settings.Shared.EnvVars)+len(project.EnvVars)+1)
+	raw := make(map[string]string, len(settings.Shared.EnvVars)+len(project.EnvVars))
 	for k, v := range settings.Shared.EnvVars {
-		vars[k] = config.ExpandVar(v, config.ProjectVarName, projectDir)
+		raw[k] = v
 	}
 	for k, v := range project.EnvVars {
-		vars[k] = config.ExpandVar(v, config.ProjectVarName, projectDir)
+		raw[k] = v
+	}
+	vars, err := resolveVarRefs(raw, projectDir, home)
+	if err != nil {
+		return nil, fmt.Errorf("envs.%s.env-vars: %w", projectName, err)
 	}
 	vars[config.ProjectVarName] = projectDir
 
@@ -95,6 +105,67 @@ func resolveProjectPath(raw string) (string, error) {
 		return "", fmt.Errorf("project path %q does not resolve to an absolute path (expected it to start with / after ~ or $HOME expansion)", raw)
 	}
 	return cleaned, nil
+}
+
+// resolveVarRefs resolves "$name"/"${name}" references inside raw's values — via
+// config.ExpandVar, so still no command substitution, no globbing, no shell of any kind — where
+// name may be: "HOME" (the current user's home directory), "_PROJECT" or "PROJECT" (both alias
+// the same resolved project directory projectDir; "PROJECT" exists only so a value can reference
+// it without the leading underscore), or the name of another key in raw itself. A reference to
+// any other name isn't a mistake — it just isn't something this function knows how to resolve, so
+// it passes through unexpanded, same as config.ExpandHome already documents for its callers.
+//
+// Resolution follows each value's actual dependencies, not map iteration or declaration order:
+// a variable that references another still-unresolved variable is resolved only after that
+// dependency is, however many keys apart they are or whichever was declared first. A reference
+// cycle (direct or transitive) is reported as an error — with the chain that closed it — rather
+// than looped on or silently left unresolved.
+func resolveVarRefs(raw map[string]string, projectDir, home string) (map[string]string, error) {
+	const (
+		unvisited = iota
+		inProgress
+		done
+	)
+	resolved := make(map[string]string, len(raw))
+	state := make(map[string]int, len(raw))
+
+	var resolve func(name string, chain []string) (string, error)
+	resolve = func(name string, chain []string) (string, error) {
+		if v, ok := resolved[name]; ok {
+			return v, nil
+		}
+		if state[name] == inProgress {
+			return "", fmt.Errorf("circular reference: %s", strings.Join(append(chain, name), " -> "))
+		}
+		state[name] = inProgress
+		val := raw[name]
+		for _, ref := range config.ReferencedVarNames(val) {
+			switch ref {
+			case "HOME":
+				val = config.ExpandVar(val, "HOME", home)
+			case "_PROJECT", "PROJECT":
+				val = config.ExpandVar(val, ref, projectDir)
+			default:
+				if _, ok := raw[ref]; ok {
+					depVal, err := resolve(ref, append(chain, name))
+					if err != nil {
+						return "", err
+					}
+					val = config.ExpandVar(val, ref, depVal)
+				}
+			}
+		}
+		state[name] = done
+		resolved[name] = val
+		return val, nil
+	}
+
+	for name := range raw {
+		if _, err := resolve(name, nil); err != nil {
+			return nil, err
+		}
+	}
+	return resolved, nil
 }
 
 func sortedStringKeys[V any](m map[string]V) []string {

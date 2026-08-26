@@ -110,6 +110,52 @@ func isVarIdentByte(b byte) bool {
 	return b == '_' || (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9')
 }
 
+// ReferencedVarNames returns, in first-appearance order, the distinct "$name"/"${name}"
+// reference names found in s — the same syntax ExpandVar recognizes for one specific name,
+// applied generally so a caller can discover which names a value depends on before resolving
+// any of them. It is pure syntax: it does not know whether any given name means anything, and
+// (like ExpandVar) it never matches "$(", "`", or other shell metacharacters — those pass through
+// untouched, exactly as they do today.
+func ReferencedVarNames(s string) []string {
+	var names []string
+	seen := make(map[string]bool)
+	for i := 0; i < len(s); i++ {
+		if s[i] != '$' {
+			continue
+		}
+		rest := s[i+1:]
+		name := ""
+		if strings.HasPrefix(rest, "{") {
+			if end := strings.IndexByte(rest, '}'); end > 1 {
+				candidate := rest[1:end]
+				valid := true
+				for j := 0; j < len(candidate); j++ {
+					if !isVarIdentByte(candidate[j]) {
+						valid = false
+						break
+					}
+				}
+				if valid {
+					name = candidate
+				}
+			}
+		} else {
+			j := 0
+			for j < len(rest) && isVarIdentByte(rest[j]) {
+				j++
+			}
+			if j > 0 {
+				name = rest[:j]
+			}
+		}
+		if name != "" && !seen[name] {
+			seen[name] = true
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
 func EnsurePrivate(path string, directory bool) error {
 	info, err := os.Lstat(path)
 	if err != nil {
